@@ -1,0 +1,9 @@
+{
+    "cmake.ignoreCMakeListsMissing": true,
+    "files.associations": {
+        "kernel.h": "c",
+        "log.h": "c",
+        "sensor.h": "c",
+        "app_version.h": "c"
+    },
+}
