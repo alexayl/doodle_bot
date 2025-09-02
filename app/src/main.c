@@ -3,7 +3,7 @@
 int main(void)
 {
     while (1) {
-        printk("Hello World! QEMU\n");
+        printk("Hello World! \n");
         k_msleep(1000);
     }
 }

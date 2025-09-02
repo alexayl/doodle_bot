@@ -4,32 +4,33 @@
 
 ### Prerequisites
 
-- Python3
+- [Python3](https://www.python.org/)
 - [Zephyr SDK](https://docs.zephyrproject.org/latest/getting_started/index.html)
-- [West tool](https://docs.zephyrproject.org/latest/guides/west/index.html)
 - [Just command runner](https://github.com/casey/just)
-- Python environment with pyenv (recommended)
 
 ### Setup Instructions
 
+Create workspace and clone code
 ```bash
-# Initialize workspace for the lidar demo app
+mkdir -p doodle_bot_workspace && cd doodle_bot_workspace
 
-west init -m https://github.com/alexayl/Zephyr-App-Base --mr main zephyr_base_app
+python3 -m venv .venv
 
-cd projects/zephyr-base-app-workspace
+source .venv/bin/activate # or windows command
 
-pyenv local zephyr-313 # if using pyenv
+pip install west
+
+cd .. && west init -m https://github.com/alexayl/doodle_bot --mr main doodle_bot_workspace
+
+cd doodle_bot_workspace
 
 west update
 
-cd zephyr-base-app
+cd doodle-bot
 
 west packages pip --install
 
-just init
-
-just build-esp32
+cp -r doodle-bot/scripts/.vscode .vscode
 ```
 
 ### Building and Flashing
@@ -51,11 +52,8 @@ just run-esp32
 
 ## Usage
 
-[tbd]
 ## License
 
 This project is licensed under the Apache License 2.0. See the LICENSE file for details.
 
 ---
-
-*Based on my [Zephyr starter app template](https://github.com/alexayl/zephyr-app-base)*

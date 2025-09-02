@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "kernel.h": "c"
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/zephyr/include",
+        "${workspaceFolder}/doodle-bot/app/include"
+    ]
+}

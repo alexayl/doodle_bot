@@ -3,7 +3,7 @@
 
 manifest:
   self:
-    path: zephyr-app-base
+    path: doodle-bot
 
   remotes:
     - name: zephyrproject-rtos

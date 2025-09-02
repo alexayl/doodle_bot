@@ -1,7 +1,7 @@
 # ------------------
 #  Configurables
 # ------------------
-APP_NAME         := "zephyr-app-base"
+APP_NAME         := "doodle-bot"
 CMAKE_ARGS      := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 ESP_BOARD       := "esp32s3_devkitc"
 # Change this to match your ESP32-S3 serial port
