@@ -5,7 +5,7 @@ APP_NAME         := "zephyr-app-base"
 CMAKE_ARGS      := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 ESP_BOARD       := "esp32s3_devkitc"
 # Change this to match your ESP32-S3 serial port
-ESP_PORT        := "/dev/tty.usbserial-210"
+ESP_PORT        := "/dev/ttyUSB0"
 
 # ------------------
 #  Tasks
