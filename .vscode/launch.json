@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run QEMU (just run-sim)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "/bin/bash",
+      "args": ["-c", "just run-sim"],
+      "cwd": "${workspaceFolder}/firmware",
+      "console": "integratedTerminal",
+      "env": {
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+      }
+    },
+    {
+      "name": "Run ESP32 (just run-esp32)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "/bin/bash",
+      "args": ["-c", "just run-esp32"],
+      "cwd": "${workspaceFolder}/firmware",
+      "console": "integratedTerminal",
+      "env": {
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+      }
+    }
+  ]
+}
