@@ -1,10 +1,11 @@
+
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(doodle_bot)
 
-project(app LANGUAGES C)
+project(app LANGUAGES C CXX)
 
-file(GLOB DOODLE_BOT_SOURCES "src/*.c")
+file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
 
 target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)

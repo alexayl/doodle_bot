@@ -1,6 +1,3 @@
-#ifndef COMMS_H
-#define COMMS_H
+#pragma once
 
 void comms_thread(void *, void *, void *);
-
-#endif // COMMS_H
