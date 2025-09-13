@@ -1,9 +1,7 @@
 #include <zephyr/kernel.h>
-#include <state.h>
-#include <stdio.h>
+#include "state_task.h"
 
-
-// #define DEBUG_LIDAR
+// put this in a different thing later
 
 void state_thread(void *arg1, void *arg2, void *arg3) {
 
