@@ -1,2 +1,3 @@
 render:
-    dot -Tpng state_machine/state_machine.dot -o state_machine/state_machine.png
+    dot -Tpng firmware/state_machine/state_machine.dot -o firmware/state_machine/state_machine.png
+    dot -Tpng general/block_diagram.dot -o general/block_diagram.png
