@@ -1,6 +1,6 @@
-# Zephyr Monorepo Template
+# Doodle Bot
 
-A template repository for managing a monorepo containing a Zephyr project.
+A device for autonomous whiteboard management.
 
 
 ## Setup
@@ -11,42 +11,62 @@ Requirements: graphviz
 
 ### Firmware
 
-0. Install prerequisites
+_Note: If you are on a PC, Zephyr does not work well with WSL. Please use Windows native, or consider eventually dual-booting/VM linux!_
+
+1. Install prerequisites
 
     - [Python3](https://www.geeksforgeeks.org/python/download-and-install-python-3-latest-version/)
 
-    - Complete **only** the following sections of the [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html#getting-started-guide).
-        - [Install Dependencies](https://docs.zephyrproject.org/latest/develop/getting_started/index.html#install-dependencies)
-        - Skip *Get Zephyr and install Python dependencies*
-        - [Install the Zephyr SDK](https://docs.zephyrproject.org/latest/develop/getting_started/index.html#install-the-zephyr-sdk)
+    - Complete **only** the [Install Dependencies](https://docs.zephyrproject.org/latest/develop/getting_started/index.html#install-dependencies) section of the [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html#getting-started-guide).
 
     - [Just command runner](https://github.com/casey/just?tab=readme-ov-file#installation) - This is used like a makefile as a hotkey for all of our project-specific commands
+        - If you are using Windows, installing chocolatey package manager is recommended. After installing chocolatey, you can install just by running `choco install just`.
+        - If you are on Mac, use the [Homebrew](https://brew.sh/) command `brew install just`.
 
-1. Clone this repository:
+2. Clone this repository:
     ```bash
-    git clone https://github.com/alexayl/zephyr_monorepo_template.git
-    cd zephyr_monorepo_template
+    git clone git@github.com:alexayl/doodle_bot.git
+    cd doodle_bot
     ```
 
-2. Create and activate a Python virtual environment:
+3. Create and activate a Python virtual environment:
     ```bash
     python -m venv .venv
-    source .venv/bin/activate  # On Linux/macOS
+    
+    source .venv/bin/activate     # Linux/macOS
+    .venv\Scripts\activate.bat    # PC, Command Prompt
+    .venv\Scripts\Activate.ps1    # PC, Powershell
+    source .venv/Scripts/activate # PC. Git bash
     ```
 
-3. Install west
+4. Install west
     ```bash
     pip install west
     ```
 
-4. Update the workspace
+5. Update the workspace
     ```bash
     cd firmware
     west update
     west packages pip --install
     ```
-    
-5. Try to build and run
-    ```bash
-    just run-sim
-    ```
+
+6. Install the Zephyr SDK
+    1. navigate to `doodle_bot/firmware/zephyr`
+        ```bash
+        cd zephyr
+        ```
+    2.  Perform installation 
+        ```bash
+        west sdk install
+        ```
+
+7. Try to build and run
+    1. navigate to `doodle_bot/firmware`
+        ```bash
+        cd ..
+        ```
+    2.  Build the sim to verify it works 
+        ```bash
+        just run-sim
+        ```
