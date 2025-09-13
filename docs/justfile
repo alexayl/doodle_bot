@@ -1,0 +1,2 @@
+render:
+    dot -Tpng state_machine/state_machine.dot -o state_machine/state_machine.png

@@ -1,0 +1,27 @@
+digraph DoodlebotStateMachine {
+  rankdir=LR;
+  labelloc="t";
+  label="Doodlebot State Machine";
+
+  node [shape=ellipse, fontname="Helvetica"];
+
+  Start [shape=point];
+
+  // States
+  Idle;
+  Draw;
+  Erase;
+
+  // Start
+  Start -> Idle;
+
+  // Transitions
+  Idle -> Draw   [label="cmd_draw"];
+  Idle -> Erase  [label="cmd_erase"];
+
+  Draw -> Idle   [label="done"];
+  Erase -> Idle  [label="done"];
+
+  Draw -> Erase  [label="cmd_erase"];
+  Erase -> Draw  [label="cmd_draw"];
+}

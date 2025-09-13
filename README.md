@@ -5,6 +5,12 @@ A template repository for managing a monorepo containing a Zephyr project.
 
 ## Setup
 
+### Docs
+
+Requirements: graphviz
+
+### Firmware
+
 0. Install prerequisites
 
     - [Python3](https://www.geeksforgeeks.org/python/download-and-install-python-3-latest-version/)
