@@ -53,6 +53,13 @@ monitor-esp32:
 run-esp32: build-esp32 flash-esp32 monitor-esp32
 
 # ------------------
+# Tests
+# -----------------
+test: clean
+  west build -b native_sim tests/state_machine
+  west build -t run
+
+# ------------------
 #  Defaults
 # ------------------
 
