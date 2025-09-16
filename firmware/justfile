@@ -6,9 +6,9 @@ SIM_BOARD        := "qemu_x86"
 ESP_BOARD        := "esp32s3_devkitc/esp32s3/procpu"
 ESP_PORT         := "/dev/ttyUSB0"          # adjust
 
-CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+NRF_BOARD       := "nrf52840dk/nrf52840"
 
-set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 
 # ------------------
 #  Helpers
@@ -51,6 +51,30 @@ monitor-esp32:
   python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
 
 run-esp32: build-esp32 flash-esp32 monitor-esp32
+
+
+# ------------------------------------
+#  Nordic nRF52840 Development Kit
+# ------------------------------------
+
+build-nrf: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}}
+
+# TODO: add overlay file for nRF52840
+
+flash-nrf:
+  west flash --build-dir build
+
+monitor-nrf:
+  python -m serial.tools.miniterm "/dev/ttyACM0" 115200
+
+
+run-nrf: build-nrf flash-nrf monitor-nrf
 
 # ------------------
 # Tests
