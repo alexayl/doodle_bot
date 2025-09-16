@@ -23,6 +23,10 @@ _Note: If you are on a PC, Zephyr does not work well with WSL. Please use Window
         - If you are using Windows, installing chocolatey package manager is recommended. After installing chocolatey, you can install just by running `choco install just`.
         - If you are on Mac, use the [Homebrew](https://brew.sh/) command `brew install just`.
 
+If building for nrf52840 dk:
+    - SEGGER J-Link DLL
+    - nrfutil (there is a python lib that allegedly has it; I needed to install it from the website though due to python dependency version conflicts)
+
 2. Clone this repository:
     ```bash
     git clone git@github.com:alexayl/doodle_bot.git
