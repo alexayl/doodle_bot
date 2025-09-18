@@ -65,6 +65,17 @@ build-nrf: _verify_workspace clean
     app \
     {{CMAKE_CACHE_ARGS}}
 
+
+build-blinky:
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    zephyr/samples/basic/blinky_pwm \
+    {{CMAKE_CACHE_ARGS}} \
+    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/zephyr/samples/basic/blinky_pwm/boards/nrf52840dk_nrf52840.overlay"
+
+
 # TODO: add overlay file for nRF52840
 
 flash-nrf:
