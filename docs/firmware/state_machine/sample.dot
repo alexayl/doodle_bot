@@ -1,0 +1,36 @@
+// StateMachine_Sequence_Tests.dot
+digraph SequenceTests {
+    rankdir=LR; fontname="Helvetica"; splines=ortho;
+    node [shape=box, style=rounded, fontsize=12];
+
+    subgraph cluster_A {
+        label="Test C: Idle → Draw → Pause → Resume → Done";
+        color="#5aa469";
+        A0 [label="Idle"];
+        A1 [label="Draw"];
+        A2 [label="Pause"];
+        A3 [label="Draw"];
+        A4 [label="Idle"];
+        A0 -> A1 [label="cmd_draw"];
+        A1 -> A2 [label="pause"];
+        A2 -> A3 [label="resume"];
+        A3 -> A4 [label="done"];
+    }
+
+    subgraph cluster_B {
+        label="Test B: Fault handling & recovery";
+        color="#e26d5a";
+        B0 [label="Draw"];
+        B1 [label="Error"];
+        B2 [label="Idle"];
+        B0 -> B1 [label="fault"];
+        B1 -> B2 [label="reset"];
+    }
+
+    subgraph cluster_C {
+        label="Test A: Illegal transition rejection";
+        color="#f0ad4e";
+        C0 [label="Pause"];
+        C1 [label="Error"];
+        C0 -> C1 [label="cmd_erase"];
+    }}
