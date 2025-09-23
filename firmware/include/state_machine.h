@@ -12,26 +12,38 @@
  * Each value corresponds to a state handler function in the state machine. They are specified here for debugging purposes.
  */
 enum class State : uint8_t {
+    Init,
     Idle,
-    // DRAWING,
-    Erasing
+    Draw,
+    Erase,
+    Pause,
+    Error
 };
 
 /**
  * @brief External events the state machine can process.
  */
 enum class Event : uint8_t {
-    EraseAcknowledge,
-    TransformationDone
+    CmdDraw,
+    CmdErase,
+    CmdPause,
+    CmdResume,
+    Fault,
+    Reset,
+    Done,
+    Ready
 };
 
 /**
  * @brief Commands (outputs) produced by the state machine.
  */
 enum class Command : uint8_t {
-    DeviceSleep, 
+    None,
+    StartDraw,
     StartErase,
-    None
+    DeviceSleep,
+    HaltMotion,
+    ResumeMotion
 };
 
 /**
@@ -87,7 +99,11 @@ class DoodleBotState {
         void transition(StateHandler next, Command cmd, State s);
 
         // --- state handlers ---
+        void stateInit(Event e);
         void stateIdle(Event e);
-        void stateErasing(Event e);
+        void stateDraw(Event e);
+        void stateErase(Event e);
+        void statePause(Event e);
+        void stateError(Event e);
 
 };

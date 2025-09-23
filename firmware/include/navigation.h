@@ -6,11 +6,18 @@
 
 /* Data types */
 
-enum class PeripheralPosition : bool {Down, Up};
+enum class PeripheralPosition : uint8_t {Down, Up};
+
+enum class StepperDirection : uint8_t {Clockwise, CounterClockwise};
 
 struct nav_instr_t {
     uint8_t x_delta, y_delta;
     PeripheralPosition eraser_position, marker_position; 
+};
+
+struct stepper_instr_t {
+    uint8_t steps, velocity;
+    StepperDirection stepper_direction; 
 };
 
 inline std::ostream& operator<<(std::ostream& os, const nav_instr_t& instr) {

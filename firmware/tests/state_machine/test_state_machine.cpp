@@ -26,3 +26,12 @@ ZTEST(state_machine, test_erase_to_idle_transition)
 }
 
 ZTEST_SUITE(state_machine, NULL, NULL, NULL, NULL, NULL);
+
+
+
+ZTEST(nav_math, test_heading_left) {
+    float dx = 0.0f, dy = 1.0f, theta = 0.0f;
+    float theta_d = desired_heading(dx, dy);
+    zassert_within(theta_d, M_PI/2, 1e-3, "Heading should be 90 deg left");
+}
+

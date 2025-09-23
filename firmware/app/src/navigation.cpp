@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <iostream>
 
+gcode_to_nav(const nav_instr_t &gcode_instr) {
+    
+}
 
 void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
 
@@ -14,6 +17,12 @@ void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
         k_msgq_get(q, &current_instruction, K_NO_WAIT);
         std::cout << "Nav thread received: " << current_instruction << std::endl;
         
+        gcode_to_nav(current_instruction);
+
+        send_nav_instr();
+
+         
+
         k_msleep(1000);
     }
 
