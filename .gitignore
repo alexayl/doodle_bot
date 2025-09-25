@@ -1,2 +1,4 @@
 .venv
 pathfinding_algorithm/*/*
+.DS_Store
+model/doodle_bot.blend
