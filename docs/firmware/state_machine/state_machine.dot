@@ -1,27 +1,43 @@
 digraph DoodlebotStateMachine {
   rankdir=LR;
   labelloc="t";
-  label="Doodlebot State Machine";
-
   node [shape=ellipse, fontname="Helvetica"];
 
   Start [shape=point];
 
   // States
+  Init;
   Idle;
   Draw;
   Erase;
+  Pause;
+  Error;
 
   // Start
-  Start -> Idle;
+  Start -> Init;
+  Init -> Idle [label="ready"];
 
-  // Transitions
+  // Normal flow
   Idle -> Draw   [label="cmd_draw"];
   Idle -> Erase  [label="cmd_erase"];
 
   Draw -> Idle   [label="done"];
   Erase -> Idle  [label="done"];
 
-  Draw -> Erase  [label="cmd_erase"];
-  Erase -> Draw  [label="cmd_draw"];
+  // Draw -> Erase  [label="cmd_erase"];
+  // Erase -> Draw  [label="cmd_draw"];
+
+  // Pause/resume
+  Draw -> Pause  [label="pause"];
+  Erase -> Pause [label="pause"];
+  Pause -> Draw  [label="resume"];
+  Pause -> Erase [label="resume"];
+
+  // Fault handling
+  Idle -> Error  [label="fault"];
+  Draw -> Error  [label="fault"];
+  Erase -> Error [label="fault"];
+  Pause -> Error [label="fault"];
+
+  Error -> Idle  [label="reset"];
 }
