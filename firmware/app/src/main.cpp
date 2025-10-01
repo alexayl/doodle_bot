@@ -1,9 +1,11 @@
 #include <zephyr/kernel.h>
 #include <stdlib.h>
+#include <zephyr/sys/printk.h>
 
 #include "comms.h"
 #include "navigation.h"
 #include "state_task.h"
+#include "servo_control.h"
 // #include "ui.h"
 
 /* QUEUE MANAGEMENT */
@@ -30,6 +32,12 @@ static struct k_thread state_thread_data;
 
 int main(void) {
 
+    printk("Doodle Bot Firmware Starting...\n");
+    
+    /* Run initial servo test */
+    servo_power_safe_test();
+    
+    /* Start background threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
                     comms_thread, &nav_instr_queue, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);
@@ -41,6 +49,9 @@ int main(void) {
     k_thread_create(&state_thread_data, state_stack, STACK_SIZE,
                     state_thread, NULL, NULL, NULL,
                     STATE_PRIORITY, 0, K_NO_WAIT);
+
+    /* Run continuous servo sweep in main thread */
+    servo_continuous_sweep();
 
     return EXIT_SUCCESS;
 }

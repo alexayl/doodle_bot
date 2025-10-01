@@ -34,14 +34,14 @@ void DoodleBotState::transition(StateHandler next, Command cmd, State s) {
 // --------------------------
 
 void DoodleBotState::stateIdle(Event e) {
-    if (e == Event::EraseAcknowledge) {
-        transition(&DoodleBotState::stateErasing, Command::StartErase, State::Erasing);
+    if (e == Event::CmdErase) {
+        transition(&DoodleBotState::stateErase, Command::StartErase, State::Erase);
     }
 }
 
 
-void DoodleBotState::stateErasing(Event e) {
-    if (e == Event::TransformationDone) {
+void DoodleBotState::stateErase(Event e) {
+    if (e == Event::Done) {
         transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);        
     }
 }

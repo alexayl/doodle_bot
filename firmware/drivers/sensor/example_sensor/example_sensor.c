@@ -8,6 +8,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/devicetree.h> // added for DT macro usage example
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(example_sensor, CONFIG_SENSOR_LOG_LEVEL);
@@ -84,3 +85,6 @@ static int example_sensor_init(const struct device *dev)
 			      CONFIG_SENSOR_INIT_PRIORITY, &example_sensor_api);
 
 DT_INST_FOREACH_STATUS_OKAY(EXAMPLE_SENSOR_INIT)
+
+// You can add a servo driver in a similar pattern under firmware/drivers/servo
+// See firmware/drivers/servo/* for an example implementation that uses the Zephyr PWM API.

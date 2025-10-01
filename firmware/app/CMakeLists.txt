@@ -9,3 +9,16 @@ file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
 
 target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)
+
+# Add custom servo driver directly to the application
+if(CONFIG_SERVO)
+    target_sources(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c)
+    target_include_directories(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo)
+endif()
+
+# Add specific flags for x86 platform to handle floating point
+if(CONFIG_X86)
+    target_compile_options(app PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-m32 -mno-sse -mno-mmx>
+    )
+endif()

@@ -15,6 +15,11 @@
 		input-gpios = <&gpioc 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 	};
 
+	servo_0: servo@0 {
+		compatible = "doodle,servo";
+		pwms = <&pwm1 1 PWM_USEC(20000) PWM_POLARITY_NORMAL>;
+		status = "okay";
+	};
 };
 
 &gpioc {

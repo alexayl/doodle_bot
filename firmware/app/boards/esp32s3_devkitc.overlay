@@ -1,7 +1,22 @@
 / {
-    example_sensor: example_sensor_0 {
-        compatible = "zephyr,example-sensor";
-        input-gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
-        status = "okay";
+    servo: servo {
+        compatible = "doodle-servo";
+        pwms = <&ledc0 0 20000000 0>; /* 20ms period, normal polarity */
+    };
+};
+
+&ledc0 {
+    status = "okay";
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    #pwm-cells = <3>;
+};
+
+&pinctrl {
+    ledc0_default: ledc0_default {
+        group1 {
+            pinmux = <LEDC_CH0_GPIO4>;
+            output-enable;
+        };
     };
 };

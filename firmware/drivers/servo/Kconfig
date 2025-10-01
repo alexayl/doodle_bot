@@ -1,0 +1,11 @@
+config SERVO
+	bool "Servo driver"
+	default y
+
+config SERVO_INIT_PRIORITY
+	int "Servo init priority"
+	default 60
+
+config SERVO_LOG_LEVEL
+	int "Servo log level"
+	default 3

@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Doodle Bot Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: PWM-driven servo motor with custom driver.
+
+compatible: "doodle-servo"
+
+include: base.yaml
+
+properties:
+  pwms:
+    required: true
+    type: phandle-array
+    description: PWM specifier driving the servo motor.
