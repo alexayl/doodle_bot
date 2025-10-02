@@ -33,15 +33,52 @@ void DoodleBotState::transition(StateHandler next, Command cmd, State s) {
 // state function definitions
 // --------------------------
 
-void DoodleBotState::stateIdle(Event e) {
-    if (e == Event::EraseAcknowledge) {
-        transition(&DoodleBotState::stateErasing, Command::StartErase, State::Erasing);
+void DoodleBotState::stateInit(Event e) {
+    if (e == Event::InitDone) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
     }
 }
 
+void DoodleBotState::stateIdle(Event e) {
+    if (e == Event::EraseAcknowledge) {
+        transition(&DoodleBotState::stateErase, Command::StartErase, State::Erase);
+    } else if (e == Event::DrawRequest) {
+        transition(&DoodleBotState::stateDraw, Command::StartDraw, State::Draw);
+    } else if (e == Event::PauseRequest) {
+        transition(&DoodleBotState::statePause, Command::Pause, State::Pause);
+    } else if (e == Event::ErrorDetected) {
+        transition(&DoodleBotState::stateError, Command::HandleError, State::Error);
+    }
+}
 
-void DoodleBotState::stateErasing(Event e) {
-    if (e == Event::TransformationDone) {
-        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);        
+void DoodleBotState::stateDraw(Event e) {
+    if (e == Event::DrawDone) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
+    } else if (e == Event::PauseRequest) {
+        transition(&DoodleBotState::statePause, Command::Pause, State::Pause);
+    } else if (e == Event::ErrorDetected) {
+        transition(&DoodleBotState::stateError, Command::HandleError, State::Error);
+    }
+}
+
+void DoodleBotState::stateErase(Event e) {
+    if (e == Event::EraseDone) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
+    } else if (e == Event::ErrorDetected) {
+        transition(&DoodleBotState::stateError, Command::HandleError, State::Error);
+    }
+}
+
+void DoodleBotState::statePause(Event e) {
+    if (e == Event::ResumeRequest) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
+    } else if (e == Event::ErrorDetected) {
+        transition(&DoodleBotState::stateError, Command::HandleError, State::Error);
+    }
+}
+
+void DoodleBotState::stateError(Event e) {
+    if (e == Event::ErrorResolved) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
     }
 }
