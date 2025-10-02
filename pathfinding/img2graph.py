@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import os
-from scipy.ndimage import convolve
 from skimage.feature import canny
 
 def save_image(fig, img_name, directory, extension=".png"):
@@ -29,15 +28,17 @@ def save_image(fig, img_name, directory, extension=".png"):
     except Exception as e:
         print(f"Error saving figure: {e}")
 
-def load_image(img_name, directory="png/", extension=".png", debug=False, save=False):
+def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug=False, save=False):
     """
         Load an image and convert it to grayscale.
 
         Args:
             image_name (str): Name of the image file without extension.
+            img_name_ext (str): Name of the image file with extension.
             directory (str): Directory where the image is located.
             extension (str): Extension of the image file.
             debug (bool): Whether to display the debugging information.
+            save (bool): Whether to save the debugging information.
 
         Returns:
             PIL.Image: Grayscale image object.
@@ -77,16 +78,18 @@ def load_image(img_name, directory="png/", extension=".png", debug=False, save=F
 
     return img
 
-def scale_to_canvas(img, canvas_size=(1000, 1460), padding_percentage=0.1, debug=False, save=False):
+def scale_to_canvas(img, img_name_ext, canvas_size=(1000, 1460), padding_percentage=0.05, debug=False, save=False):
     """
         Scale an image to fit within a specified canvas size while maintaining 
         aspect ratio.
 
         Args:
             img (PIL.Image): Input image to be scaled.
+            img_name_ext (str): Name of the image file with extension.
             canvas_size (tuple): Desired canvas size as (width, height).
             padding_percentage (float): Percentage of canvas size to use as padding.
             debug (bool): Whether to display the debugging information.
+            save (bool): Whether to save the debugging information.
 
         Returns:
             PIL.Image: Scaled image centered on a canvas of specified size.
@@ -158,13 +161,28 @@ def scale_to_canvas(img, canvas_size=(1000, 1460), padding_percentage=0.1, debug
     
     return canvas
 
-def edge_map(img, debug=False, save=False):
+def edge_map(img, img_name_ext, debug=False, save=False):
+    """
+        Extract edges from an image using Canny edge detection.
+        
+        Args:
+            img (PIL.Image): Input grayscale image.
+            img_name_ext (str): Name of the image file with extension.
+            debug (bool): Whether to display the debugging information.
+            save (bool): Whether to save the debugging information.
 
+        Returns:
+            np.ndarray: Binary edge map of the image.
+    """
+
+    # Convert img to numpy array
     img_array = np.array(img)
 
+    # Extract edges using Canny edge detection
     edges = canny(img_array, sigma=1.0)
     edge_map = (~edges * 255).astype(np.uint8)
 
+    # Display edge map if debugging
     if debug or save:
         plt.title("canny edge map of " + img_name_ext)
         plt.imshow(edge_map, cmap='gray')
@@ -179,8 +197,23 @@ def edge_map(img, debug=False, save=False):
 
     return edge_map
     
-def node_map(img, debug=False, save=False):
+def node_map(img, img_name_ext, debug=False, save=False):
+    """
+        Create a graph from the edge map by placing nodes at dark pixels
+        and connecting neighboring nodes. Optimize the graph by removing
+        staircase nodes and merging disjoint sections.
+        
+        Args:
+            img (np.ndarray): Binary edge map of the image.
+            img_name_ext (str): Name of the image file with extension.
+            debug (bool): Whether to display the debugging information.
+            save (bool): Whether to save the debugging information.
 
+        Returns:
+            networkx.Graph: Graph representation of the image edges.
+    """
+
+    # Create graph
     graph = nx.Graph()
     nodes = dict()
     rows, cols = img.shape
@@ -242,21 +275,8 @@ def node_map(img, debug=False, save=False):
                         graph.nodes[node]['endpoint'] = True
                         graph.nodes[node]['componentID'] = component_id
                         endpoints.append(node)
-                    # elif ('color' in graph.nodes[node]):
-                    #     graph.nodes[node]['color'] = 'black'
-                    #     graph.nodes[node]['endpoint'] = False
-                    #     graph.nodes[node]['componentID'] = component_id
                 if end_not_fount:
-
-                    # Add a few possible endpoints
-                    # for i in range(0, len(disjoint), min_size):
-                    #     node = list(disjoint)[i]
-                    #     graph.nodes[node]['color'] = 'red'
-                    #     graph.nodes[node]['endpoint'] = True
-                    #     graph.nodes[node]['componentID'] = component_id
-                    #     endpoints.append(node)
-
-                    # Add one endpoint
+                    # Add one endpoint --- could optimize this later
                     node = list(disjoint)[0]
                     graph.nodes[node]['color'] = 'red'
                     graph.nodes[node]['endpoint'] = True
@@ -309,14 +329,28 @@ def node_map(img, debug=False, save=False):
             save_image(fig, "node_map_" + img_name, "outputs/node_map/", extension=".png")
         plt.close(fig)
         
-    return
+    return graph
 
-def img2graph(img_name, debug, save):
-
-    img = load_image(img_name, debug=debug[0], save=save[0])
-    img_scaled = scale_to_canvas(img, debug=debug[1], save=save[1])
-    img_edge = edge_map(img_scaled, debug=debug[2], save=save[2])
-    img_graph = node_map(img_edge, debug=debug[4], save=save[4])
+def img2graph(img_name, debug=[False, False, False, False],
+              save=[False, False, False, False]):
+    """
+        Convert an image to a graph by processing it through several steps:
+        loading, scaling, edge detection, and node mapping.
+        
+        Args:
+            img_name (str): Name of the image file without extension.
+            debug (list): List of booleans for debugging each step.
+            save (list): List of booleans for saving each step.
+        
+        Returns:
+            networkx.Graph: Graph representation of the image edges.
+    """
+    
+    img_name_ext = img_name + ".png"
+    img = load_image(img_name, img_name_ext, debug=debug[0], save=save[0])
+    img_scaled = scale_to_canvas(img, img_name_ext, debug=debug[1], save=save[1])
+    img_edge = edge_map(img_scaled, img_name_ext, debug=debug[2], save=save[2])
+    img_graph = node_map(img_edge, img_name_ext, debug=debug[3], save=save[3])
     return img_graph
 
 if __name__ == "__main__":
@@ -328,13 +362,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     img_name = args.img_name
-    img_name_ext = img_name + ".png"
 
     debug_all = args.debug
     display_array = [False,   # load_image
                      False,   # scale_to_canvas
                      False,   # edge_map
-                     False,   # threshold selection
                      True     # node_map
     ]
 
@@ -342,15 +374,14 @@ if __name__ == "__main__":
     save_array = [False,   # load_image
                   False,   # scale_to_canvas
                   False,   # edge_map
-                  False,   # threshold selection
                   False    # node_map
     ]
     
     if debug_all == True:
-        display_array = [True, True, True, True, True]
+        display_array = [True, True, True, True]
 
     if save_all == True:
-        save_array = [True, True, True, True, True]
+        save_array = [True, True, True, True]
 
     if args.img_name == 'all':
         for file in os.listdir("png/"):
@@ -358,4 +389,4 @@ if __name__ == "__main__":
                 img_name = file[:-4]
                 img2graph(img_name, display_array, save_array)
     else:
-        img2graph(args.img_name, display_array, save_array)
+        img2graph(img_name, display_array, save_array)
