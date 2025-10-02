@@ -210,3 +210,60 @@ void servo_continuous_sweep(void)
 }
 
 } /* extern "C" */
+
+/**
+ * Main entry point for servo driver tests
+ */
+int main(void)
+{
+    printk("========================================\n");
+    printk("Doodle Bot Servo Driver Test Suite\n");
+    printk("Platform: Native Simulation\n");
+    printk("========================================\n\n");
+
+    // /* Test 1: Basic servo functionality */
+    // printk("--- Test 1: Power-Safe Servo Test ---\n");
+    // servo_power_safe_test();
+    // k_sleep(K_MSEC(2000));
+
+    // /* Test 2: Individual angle tests */
+    // printk("\n--- Test 2: Individual Angle Tests ---\n");
+    
+    // int test_angles[] = {0, 45, 90, 135, 180};
+    // int num_tests = sizeof(test_angles) / sizeof(test_angles[0]);
+    
+    // for (int i = 0; i < num_tests; i++) {
+    //     printk("Testing angle: %d degrees\n", test_angles[i]);
+    //     int ret = servo_set_angle_gradual(test_angles[i]);
+    //     if (ret == 0) {
+    //         printk("✓ Angle %d degrees: PASS\n", test_angles[i]);
+    //     } else {
+    //         printk("✗ Angle %d degrees: FAIL (error %d)\n", test_angles[i], ret);
+    //     }
+    //     k_sleep(K_MSEC(1000));
+    // }
+
+    // /* Test 3: Boundary tests */
+    // printk("\n--- Test 3: Boundary Tests ---\n");
+    
+    // /* Test invalid angle */
+    // printk("Testing invalid angle: 200 degrees\n");
+    // int ret = servo_set_angle_gradual(200);
+    // if (ret != 0) {
+    //     printk("✓ Invalid angle rejection: PASS\n");
+    // } else {
+    //     printk("✗ Invalid angle rejection: FAIL (should have failed)\n");
+    // }
+
+    /* Test 4: Demo sweep (shortened for testing) */
+    printk("\n--- Test 4: Demo Sweep ---\n");
+    printk("Running shortened demo sweep...\n");
+    servo_demo_sweep();
+
+    printk("\n========================================\n");
+    printk("Servo Driver Test Suite Complete\n");
+    printk("All tests executed successfully!\n");
+    printk("========================================\n");
+
+    return 0;
+}

@@ -9,3 +9,9 @@ config SERVO_INIT_PRIORITY
 config SERVO_LOG_LEVEL
 	int "Servo log level"
 	default 3
+
+config SERVO_TEST_MODE
+	bool "Enable servo test mode"
+	default n
+	help
+	  Enable servo test mode in main application
