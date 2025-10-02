@@ -33,15 +33,27 @@ void DoodleBotState::transition(StateHandler next, Command cmd, State s) {
 // state function definitions
 // --------------------------
 
+void DoodleBotState::stateInit(Event e) {
+    if (e == Event::InitDone) {
+        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);
+    }
+}
+
 void DoodleBotState::stateIdle(Event e) {
-    if (e == Event::CmdErase) {
+    if (e == Event::EraseAcknowledge) {
         transition(&DoodleBotState::stateErase, Command::StartErase, State::Erase);
+    } else if (e == Event::DrawRequest) {
+        transition(&DoodleBotState::stateDraw, Command::StartDraw, State::Draw);
+    } else if (e == Event::PauseRequest) {
+        transition(&DoodleBotState::statePause, Command::Pause, State::Pause);
+    } else if (e == Event::ErrorDetected) {
+        transition(&DoodleBotState::stateError, Command::HandleError, State::Error);
     }
 }
 
 
-void DoodleBotState::stateErase(Event e) {
-    if (e == Event::Done) {
+void DoodleBotState::stateErasing(Event e) {
+    if (e == Event::TransformationDone) {
         transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);        
     }
 }
