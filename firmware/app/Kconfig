@@ -10,5 +10,15 @@ menu "Zephyr"
 source "Kconfig.zephyr"
 endmenu
 
+# Include out-of-tree drivers
+source "../drivers/Kconfig"
+
+config SERVO_TEST
+	bool "Build servo test instead of main application"
+	select SERVO
+	help
+	  When enabled, builds the servo test application instead of the main
+	  doodle bot application. This allows testing the servo driver in isolation.
+
 module = APP
 module-str = APP

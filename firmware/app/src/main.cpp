@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <stdlib.h>
+#include <zephyr/sys/printk.h>
 
 #include "comms.h"
 #include "navigation.h"
@@ -30,6 +31,9 @@ static struct k_thread state_thread_data;
 
 int main(void) {
 
+    printk("Doodle Bot Firmware Starting...\n");
+    
+    /* Start background threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
                     comms_thread, &nav_instr_queue, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);
@@ -41,6 +45,7 @@ int main(void) {
     k_thread_create(&state_thread_data, state_stack, STACK_SIZE,
                     state_thread, NULL, NULL, NULL,
                     STATE_PRIORITY, 0, K_NO_WAIT);
+
 
     return EXIT_SUCCESS;
 }
