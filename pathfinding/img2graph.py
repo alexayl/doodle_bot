@@ -30,18 +30,18 @@ def save_image(fig, img_name, directory, extension=".png"):
 
 def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug=False, save=False):
     """
-        Load an image and convert it to grayscale.
+    Load an image and convert it to grayscale.
 
-        Args:
-            image_name (str): Name of the image file without extension.
-            img_name_ext (str): Name of the image file with extension.
-            directory (str): Directory where the image is located.
-            extension (str): Extension of the image file.
-            debug (bool): Whether to display the debugging information.
-            save (bool): Whether to save the debugging information.
+    Args:
+        image_name (str): Name of the image file without extension.
+        img_name_ext (str): Name of the image file with extension.
+        directory (str): Directory where the image is located.
+        extension (str): Extension of the image file.
+        debug (bool): Whether to display the debugging information.
+        save (bool): Whether to save the debugging information.
 
-        Returns:
-            PIL.Image: Grayscale image object.
+    Returns:
+        PIL.Image: Grayscale image object.
     """
 
     # Load image and convert to grayscale
@@ -80,19 +80,19 @@ def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug
 
 def scale_to_canvas(img, img_name_ext, canvas_size=(1000, 1460), padding_percentage=0.05, debug=False, save=False):
     """
-        Scale an image to fit within a specified canvas size while maintaining 
-        aspect ratio.
+    Scale an image to fit within a specified canvas size while maintaining 
+    aspect ratio.
 
-        Args:
-            img (PIL.Image): Input image to be scaled.
-            img_name_ext (str): Name of the image file with extension.
-            canvas_size (tuple): Desired canvas size as (width, height).
-            padding_percentage (float): Percentage of canvas size to use as padding.
-            debug (bool): Whether to display the debugging information.
-            save (bool): Whether to save the debugging information.
+    Args:
+        img (PIL.Image): Input image to be scaled.
+        img_name_ext (str): Name of the image file with extension.
+        canvas_size (tuple): Desired canvas size as (width, height).
+        padding_percentage (float): Percentage of canvas size to use as padding.
+        debug (bool): Whether to display the debugging information.
+        save (bool): Whether to save the debugging information.
 
-        Returns:
-            PIL.Image: Scaled image centered on a canvas of specified size.
+    Returns:
+        PIL.Image: Scaled image centered on a canvas of specified size.
     """
 
     # Calculate padding in pixels
@@ -163,16 +163,16 @@ def scale_to_canvas(img, img_name_ext, canvas_size=(1000, 1460), padding_percent
 
 def edge_map(img, img_name_ext, debug=False, save=False):
     """
-        Extract edges from an image using Canny edge detection.
-        
-        Args:
-            img (PIL.Image): Input grayscale image.
-            img_name_ext (str): Name of the image file with extension.
-            debug (bool): Whether to display the debugging information.
-            save (bool): Whether to save the debugging information.
+    Extract edges from an image using Canny edge detection.
+    
+    Args:
+        img (PIL.Image): Input grayscale image.
+        img_name_ext (str): Name of the image file with extension.
+        debug (bool): Whether to display the debugging information.
+        save (bool): Whether to save the debugging information.
 
-        Returns:
-            np.ndarray: Binary edge map of the image.
+    Returns:
+        np.ndarray: Binary edge map of the image.
     """
 
     # Convert img to numpy array
@@ -197,26 +197,156 @@ def edge_map(img, img_name_ext, debug=False, save=False):
 
     return edge_map
     
-def node_map(img, img_name_ext, debug=False, save=False):
-    """
-        Create a graph from the edge map by placing nodes at dark pixels
-        and connecting neighboring nodes. Optimize the graph by removing
-        staircase nodes and merging disjoint sections.
+# def node_map(img, img_name_ext, debug=False, save=False):
+#     """
+#     Create a graph from the edge map by placing nodes at dark pixels
+#     and connecting neighboring nodes. Optimize the graph by removing
+#     staircase nodes and merging disjoint sections.
+    
+#     Args:
+#         img (np.ndarray): Binary edge map of the image.
+#         img_name_ext (str): Name of the image file with extension.
+#         debug (bool): Whether to display the debugging information.
+#         save (bool): Whether to save the debugging information.
+
+#     Returns:
+#         networkx.Graph: Graph representation of the image edges.
+#     """
+
+#     # Create graph
+#     graph = nx.Graph()
+#     nodes = dict()
+#     rows, cols = img.shape
+    
+#     # add nodes for dark pixels
+#     for y in range(img.shape[0]):
+#         for x in range(img.shape[1]):
+#             if (img[y,x] == 0):
+#                 nodes[(x, rows - y)] = (x, rows - y)
+#     graph.add_nodes_from(nodes.keys())
+
+#     # debug output
+#     if debug:
+#         print("nodes:             ", graph.number_of_nodes())
+
+#     # connect neighboring nodes
+#     for (x, y) in nodes:
+#         for dx in [-1, 0, 1]:
+#             for dy in [-1, 0, 1]:
+#                 if dx == 0 and dy == 0:
+#                     continue
+#                 p = (x + dx, y + dy)
+#                 if p in nodes:
+#                     graph.add_edge((x, y), p, weight=0)
+
+#     # remove staircase nodes
+#     for (x, y) in nodes:
+#         graph_nodes = graph.nodes
+#         n = (x, y - 1) in graph_nodes
+#         w = (x - 1, y) in graph_nodes
+#         s = (x, y + 1) in graph_nodes
+#         e = (x + 1, y) in graph_nodes
+#         if n and w and not (s or e) or \
+#            n and e and not (s or w) or \
+#            s and w and not (n or e) or \
+#            s and e and not (n or w) or \
+#            n + e + s + w > 2:
+#             graph.remove_node((x, y))
+#     for (x, y) in graph.nodes:
+#         while graph.degree((x, y)) >= 3:
+#             neighbor = list(graph.neighbors((x, y)))[0]
+#             graph.remove_edge((x, y), neighbor)
+
+#     # merge disjoint sections
+#     while len(list(nx.connected_components(graph))) > 1:
+#         component_id = 0
+#         endpoints = []
+#         min_size = 5
+#         for disjoint in list(nx.connected_components(graph)):
+#             if len(disjoint) < min_size:
+#                 graph.remove_nodes_from(disjoint)
+#             else:
+#                 component_id += 1
+#                 end_not_fount = True
+#                 for node in disjoint:
+#                     if graph.degree(node) == 1:
+#                         end_not_fount = False
+#                         graph.nodes[node]['color'] = 'red'
+#                         graph.nodes[node]['endpoint'] = True
+#                         graph.nodes[node]['componentID'] = component_id
+#                         endpoints.append(node)
+#                 if end_not_fount:
+#                     # Add one endpoint --- could optimize this later
+#                     node = list(disjoint)[0]
+#                     graph.nodes[node]['color'] = 'red'
+#                     graph.nodes[node]['endpoint'] = True
+#                     graph.nodes[node]['componentID'] = component_id
+#                     endpoints.append(node)
+
+#         # Collect all potential edges with distances
+#         smallest_num_edges = 1
+#         for node1 in endpoints:
+#             node1_edges = []
+#             for node2 in endpoints:
+#                 if node1 != node2 and graph.nodes[node1]['componentID'] != graph.nodes[node2]['componentID']:
+#                     distance = np.hypot(node1[0] - node2[0], node1[1] - node2[1])
+#                     node1_edges.append((node1, node2, distance))
+            
+#             # Sort by distance and take smallest_num_edges smallest for this endpoint
+#             node1_edges.sort(key=lambda x: x[2])
+#             smallest_for_node1 = node1_edges[:smallest_num_edges]
+            
+#             # Add smallest_num_edges for this endpoint
+#             for node1, node2, distance in smallest_for_node1:
+#                 graph.add_edge(node1, node2, weight=distance)
+#                 graph[node1][node2]['color'] = 'red'
+    
+#     # debug output
+#     if debug:
+#         print("nodes (optimized): ", graph.number_of_nodes())  
+#         reduction_percentage = (len(nodes) / graph.number_of_nodes() - 1) * 100
+#         print(f"  reduced by {reduction_percentage:.1f}%")
+#         print("edges:             ", graph.number_of_edges())
+
+#     # visualize node map
+#     if debug or save:
+#         aspect_ratio = cols / rows
+#         fig, ax = plt.subplots(figsize=(5 * aspect_ratio, 5))
+#         ax.set_title("node map of " + img_name_ext)
+#         pos = {node: node for node in graph.nodes()}
+#         nx.draw(graph, pos, 
+#                 node_size=5,
+#                 node_color=[graph.nodes[node].get('color', 'black') for node in graph.nodes()], 
+#                 edge_color=[graph.edges[edge].get('color', 'black') for edge in graph.edges()],
+#                 ax=ax)
+#         ax.set_aspect('equal')
+#         ax.set_xlim(0, cols)
+#         ax.set_ylim(0, rows)
+#         ax.axis('on')
+#         if debug:
+#             plt.show()
+#         if save:
+#             save_image(fig, "node_map_" + img_name, "outputs/node_map/", extension=".png")
+#         plt.close(fig)
         
-        Args:
-            img (np.ndarray): Binary edge map of the image.
-            img_name_ext (str): Name of the image file with extension.
-            debug (bool): Whether to display the debugging information.
-            save (bool): Whether to save the debugging information.
+#     return graph
 
-        Returns:
-            networkx.Graph: Graph representation of the image edges.
+def init_nodes(img: np.ndarray) -> nx.Graph:
+    """
+    Initialize a graph from the edge map by placing nodes at dark pixels.
+    
+    Args:
+        img (np.ndarray): Binary edge map of the image.
+        debug (bool): Whether to display the debugging information.
+        
+    Returns:
+        networkx.Graph: Graph with nodes at dark pixel locations.
     """
 
-    # Create graph
+    # create graph
     graph = nx.Graph()
     nodes = dict()
-    rows, cols = img.shape
+    rows = img.shape[0]
     
     # add nodes for dark pixels
     for y in range(img.shape[0]):
@@ -225,11 +355,21 @@ def node_map(img, img_name_ext, debug=False, save=False):
                 nodes[(x, rows - y)] = (x, rows - y)
     graph.add_nodes_from(nodes.keys())
 
-    # debug output
-    if debug:
-        print("nodes:             ", graph.number_of_nodes())
+    return graph
+
+def init_edges(graph: nx.Graph) -> nx.Graph:
+    """
+    Initialize edges in the graph by connecting neighboring nodes.
+
+    Args:
+        graph (nx.Graph): Graph with nodes at dark pixel locations.
+
+    Returns:
+        nx.Graph: Graph with edges connecting neighboring nodes.
+    """
 
     # connect neighboring nodes
+    nodes = graph.nodes()
     for (x, y) in nodes:
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
@@ -238,10 +378,24 @@ def node_map(img, img_name_ext, debug=False, save=False):
                 p = (x + dx, y + dy)
                 if p in nodes:
                     graph.add_edge((x, y), p, weight=0)
+    
+    return graph
 
-    # remove staircase nodes
+def rm_nodes(graph: nx.Graph) -> nx.Graph:
+    """
+    Remove redundant nodes from the graph.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+
+    Returns:
+        nx.Graph: Graph with specified nodes removed.
+    """
+
+    # remove redundant nodes
+    nodes = list(graph.nodes())
     for (x, y) in nodes:
-        graph_nodes = graph.nodes
+        graph_nodes = graph.nodes()
         n = (x, y - 1) in graph_nodes
         w = (x - 1, y) in graph_nodes
         s = (x, y + 1) in graph_nodes
@@ -252,64 +406,155 @@ def node_map(img, img_name_ext, debug=False, save=False):
            s and e and not (n or w) or \
            n + e + s + w > 2:
             graph.remove_node((x, y))
-    for (x, y) in graph.nodes:
+
+    return graph
+
+def rm_edges(graph: nx.Graph) -> nx.Graph:
+    """
+    Remove specified edges from the graph.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+
+    Returns:
+        nx.Graph: Graph with specified edges removed.
+    """
+
+    # remove redundant edges
+    for (x, y) in graph.nodes():
         while graph.degree((x, y)) >= 3:
             neighbor = list(graph.neighbors((x, y)))[0]
             graph.remove_edge((x, y), neighbor)
 
+    return graph
+
+def rm_disjoint_sections(graph: nx.Graph, min_size: int) -> nx.Graph:
+    """
+    Remove small disjoint sections from the graph.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+        min_size (int): Minimum size of disjoint sections to keep.
+
+    Returns:
+        nx.Graph: Graph with small disjoint sections removed.
+    """
+
     # merge disjoint sections
-    while len(list(nx.connected_components(graph))) > 1:
-        component_id = 0
-        endpoints = []
-        min_size = 5
-        for disjoint in list(nx.connected_components(graph)):
-            if len(disjoint) < min_size:
-                graph.remove_nodes_from(disjoint)
-            else:
-                component_id += 1
-                end_not_fount = True
-                for node in disjoint:
-                    if graph.degree(node) == 1:
-                        end_not_fount = False
-                        graph.nodes[node]['color'] = 'red'
-                        graph.nodes[node]['endpoint'] = True
-                        graph.nodes[node]['componentID'] = component_id
-                        endpoints.append(node)
-                if end_not_fount:
-                    # Add one endpoint --- could optimize this later
-                    node = list(disjoint)[0]
+    component_id = 0
+    for component in list(nx.connected_components(graph)):
+        if len(component) < min_size:
+            graph.remove_nodes_from(component)
+        else:
+            component_id += 1
+            for node in component:
+                graph.nodes[node]['componentID'] = component_id
+
+    return graph
+
+def optimize_graph(graph: nx.Graph) -> nx.Graph:
+    """
+    Optimize the graph by removing nodes, removing redundant edges, and 
+    removing small disjoint sections.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+        debug (bool): Whether to display the debugging information.
+
+    Returns:
+        nx.Graph: Optimized graph.
+    """
+
+    graph = rm_nodes(graph)
+    graph = rm_edges(graph)
+    graph = rm_disjoint_sections(graph, 5)
+    
+    return graph
+
+def is_cyclical(graph: nx.Graph, component: set) -> bool:
+    """
+    Check if a connected component is cyclical.
+
+    Args:
+        component (nx.Graph): Connected component of the graph.
+
+    Returns:
+        bool: True if the component is cyclical, False otherwise.
+    """
+
+    subgraph = graph.subgraph(component)
+
+    all_degree_2 = all(deg == 2 for _, deg in subgraph.degree())
+    return all_degree_2 and subgraph.number_of_edges() == subgraph.number_of_nodes()
+
+def get_endpoints(graph: nx.Graph) -> tuple[nx.Graph, list]:
+    """
+    Identify endpoints in the graph and mark them.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+
+    Returns:
+        tuple: Tuple containing the graph with endpoints marked and a list of endpoint nodes.
+    """
+
+    endpoints = []
+    for component in list(nx.connected_components(graph)):
+        if is_cyclical(graph, component):
+            node1 = list(component)[0]
+            node2 = list(graph.neighbors(node1))[0]
+            graph.remove_edge(node1, node2)
+            graph.nodes[node1]['color'] = 'red'
+            graph.nodes[node2]['color'] = 'red'
+            graph.nodes[node1]['endpoint'] = True          ## maybe remove?
+            graph.nodes[node2]['endpoint'] = True          ## maybe remove?
+            endpoints.append(node1)
+            endpoints.append(node2)
+        else:
+            for node in component:
+                if graph.degree(node) == 1:
                     graph.nodes[node]['color'] = 'red'
-                    graph.nodes[node]['endpoint'] = True
-                    graph.nodes[node]['componentID'] = component_id
+                    graph.nodes[node]['endpoint'] = True   ## maybe remove?
                     endpoints.append(node)
 
-        # Collect all potential edges with distances
-        smallest_num_edges = 1
-        for node1 in endpoints:
-            node1_edges = []
-            for node2 in endpoints:
-                if node1 != node2 and graph.nodes[node1]['componentID'] != graph.nodes[node2]['componentID']:
-                    distance = np.hypot(node1[0] - node2[0], node1[1] - node2[1])
-                    node1_edges.append((node1, node2, distance))
-            
-            # Sort by distance and take smallest_num_edges smallest for this endpoint
-            node1_edges.sort(key=lambda x: x[2])
-            smallest_for_node1 = node1_edges[:smallest_num_edges]
-            
-            # Add smallest_num_edges for this endpoint
-            for node1, node2, distance in smallest_for_node1:
-                graph.add_edge(node1, node2, weight=distance)
-                graph[node1][node2]['color'] = 'red'
+    return graph, endpoints
+
+def node_map(img, img_name_ext, debug=False, save=False):
+    """
+    Create a graph from the edge map by placing nodes at dark pixels
+    and connecting neighboring nodes. Optimize the graph by removing
+    staircase nodes and merging disjoint sections.
+    
+    Args:
+        img (np.ndarray): Binary edge map of the image.
+        img_name_ext (str): Name of the image file with extension.
+        debug (bool): Whether to display the debugging information.
+        save (bool): Whether to save the debugging information.
+
+    Returns:
+        networkx.Graph: Graph representation of the image edges.
+    """
+
+    # Initialize graph with nodes and edges
+    graph = init_nodes(img)
+    graph = init_edges(graph)
+
+    # Optimize graph by roming redundant nodes, edges, and negligable disjoint sections
+    graph = optimize_graph(graph)
+
+    # Identify and mark endpoints
+    graph, endpoints = get_endpoints(graph)
     
     # debug output
     if debug:
         print("nodes (optimized): ", graph.number_of_nodes())  
-        reduction_percentage = (len(nodes) / graph.number_of_nodes() - 1) * 100
-        print(f"  reduced by {reduction_percentage:.1f}%")
+        # reduction_percentage = (len(nodes) / graph.number_of_nodes() - 1) * 100
+        # print(f"  reduced by {reduction_percentage:.1f}%")
         print("edges:             ", graph.number_of_edges())
 
     # visualize node map
     if debug or save:
+        rows, cols = img.shape
         aspect_ratio = cols / rows
         fig, ax = plt.subplots(figsize=(5 * aspect_ratio, 5))
         ax.set_title("node map of " + img_name_ext)
