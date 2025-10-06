@@ -9,4 +9,5 @@
         "stdio.h": "c",
         "iosfwd": "cpp"
     },
+    "idf.portWin": "COM7",
 }
