@@ -5,9 +5,19 @@ project(doodle_bot)
 
 project(app LANGUAGES C CXX)
 
-# Choose between main app sources or servo test
-if(CONFIG_SERVO_TEST)
-    target_sources(app PRIVATE 
+# Choose between main app sources or test applications
+if(CONFIG_LED_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/led/led_control.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/led/led_gpio.c
+    )
+elseif(CONFIG_BUZZER_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/buzzer/buzzer_test.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/buzzer.c
+    )
+elseif(CONFIG_SERVO_TEST)
+    target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
     )
 else()

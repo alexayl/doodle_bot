@@ -3,6 +3,22 @@
         compatible = "doodle-servo";
         pwms = <&pwm0 0 20000000 0>; /* 20ms period, normal polarity */
     };
+
+    leds {
+        compatible = "gpio-leds";
+        led1: led_1 {
+            gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>; /* P0.14 - LED2 on nRF52840 DK */
+        };
+    };
+
+    aliases {
+        buzzer0 = &buzzer;
+    };
+
+    buzzer: buzzer {
+        compatible = "gpio-buzzer";
+        gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>; /* P0.15 - GPIO15 for buzzer */
+    };
 };
 
 &pwm0 {
