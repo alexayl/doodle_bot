@@ -294,7 +294,101 @@ def rm_edges(graph: nx.Graph) -> nx.Graph:
 
     return graph
 
-def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=10, max_node_num: int=10000) -> nx.Graph:
+def is_cyclical(graph: nx.Graph, component: set) -> bool:
+    """
+    Check if a connected component is cyclical.
+
+    Args:
+        component (nx.Graph): Connected component of the graph.
+
+    Returns:
+        bool: True if the component is cyclical, False otherwise.
+    """
+
+    # check if all nodes have degree 2
+    subgraph = graph.subgraph(component)
+    all_degree_2 = all(deg == 2 for _, deg in subgraph.degree())
+
+    return all_degree_2 and subgraph.number_of_edges() == subgraph.number_of_nodes()
+
+def get_endpoints(graph: nx.Graph) -> tuple[nx.Graph, list]:
+    """
+    Identify endpoints in the graph and mark them.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+
+    Returns:
+        tuple: Tuple containing the graph with endpoints marked and a list of endpoint nodes.
+    """
+
+    # identify and mark endpoints
+    endpoints = []
+    component_id = 0
+    for component in list(nx.connected_components(graph)):
+        
+        # remove single-node components
+        if len(component) == 1:
+            graph.remove_nodes_from(component)
+            continue
+
+        # assign component ID to each component's nodes
+        component_len = len(component)
+        for node in component:
+            graph.nodes[node]['componentID'] = component_id
+            graph.nodes[node]['componentLen'] = component_len
+            graph.nodes[node]['color'] = 'black'
+            graph.nodes[node]['endpoint'] = False          ## maybe remove?
+        component_id += 1
+
+        # remove edge if component is cyclical, and mark endpoints
+        if is_cyclical(graph, component):
+            node1 = list(component)[0]
+            node2 = list(graph.neighbors(node1))[0]
+            graph.remove_edge(node1, node2)
+            graph.nodes[node1]['color'] = 'red'
+            graph.nodes[node2]['color'] = 'red'
+            graph.nodes[node1]['endpoint'] = True          ## maybe remove?
+            graph.nodes[node2]['endpoint'] = True          ## maybe remove?
+            endpoints.append(node1)
+            endpoints.append(node2)
+
+        # mark endpoints in non-cyclical components
+        else:
+            for node in component:
+                if graph.degree(node) == 1:
+                    graph.nodes[node]['color'] = 'red'
+                    graph.nodes[node]['endpoint'] = True   ## maybe remove?
+                    endpoints.append(node)
+
+    return graph, endpoints
+
+def collinearity_pruning(graph: nx.Graph) -> nx.Graph:
+    """
+    Remove nodes that are collinear with their neighbors.
+
+    Args:
+        graph (nx.Graph): Graph with nodes and edges.
+
+    Returns:
+        nx.Graph: Graph with collinear nodes removed.
+    """
+
+    for component in list(nx.connected_components(graph)):
+        for node in component:
+            if not graph.nodes[node]['endpoint']:
+                neighbors = list(graph.neighbors(node))
+                (x0, y0) = neighbors[0]
+                (x1, y1) = node
+                (x2, y2) = neighbors[1]
+                area = x0 * (y1 - y2) + x1 * (y2 - y0) + x2 * (y0 - y1)
+                if area == 0:
+                    graph.add_edge(neighbors[0], neighbors[1], weight=0)
+                    graph.remove_node(node)
+
+    return graph
+                    
+def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=5, max_node_num: int=10000) -> nx.Graph:
     """
     Remove small disjoint sections from the graph.
 
@@ -307,17 +401,13 @@ def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=10, max_node_n
     """
 
     # merge disjoint sections
-    component_id = 0
     component_size = min_component_size
-    while graph.number_of_nodes() > max_node_num or component_size == min_component_size and \
+    while (graph.number_of_nodes() > max_node_num or component_size == min_component_size) and \
           not nx.is_connected(graph):
         for component in list(nx.connected_components(graph)):
-            if len(component) < component_size:
+            node = list(component)[0]
+            if graph.nodes[node]['componentLen'] < component_size:
                 graph.remove_nodes_from(component)
-            else:
-                component_id += 1
-                for node in component:
-                    graph.nodes[node]['componentID'] = component_id
         component_size += 10
 
     return graph
@@ -337,56 +427,10 @@ def optimize_graph(graph: nx.Graph) -> nx.Graph:
 
     graph = rm_nodes(graph)
     graph = rm_edges(graph)
+    graph, endpoints = get_endpoints(graph)
+    graph = collinearity_pruning(graph)
     graph = rm_disjoint_sections(graph)
     
-    return graph
-
-def is_cyclical(graph: nx.Graph, component: set) -> bool:
-    """
-    Check if a connected component is cyclical.
-
-    Args:
-        component (nx.Graph): Connected component of the graph.
-
-    Returns:
-        bool: True if the component is cyclical, False otherwise.
-    """
-
-    subgraph = graph.subgraph(component)
-
-    all_degree_2 = all(deg == 2 for _, deg in subgraph.degree())
-    return all_degree_2 and subgraph.number_of_edges() == subgraph.number_of_nodes()
-
-def get_endpoints(graph: nx.Graph) -> tuple[nx.Graph, list]:
-    """
-    Identify endpoints in the graph and mark them.
-
-    Args:
-        graph (nx.Graph): Graph with nodes and edges.
-
-    Returns:
-        tuple: Tuple containing the graph with endpoints marked and a list of endpoint nodes.
-    """
-
-    endpoints = []
-    for component in list(nx.connected_components(graph)):
-        if is_cyclical(graph, component):
-            node1 = list(component)[0]
-            node2 = list(graph.neighbors(node1))[0]
-            graph.remove_edge(node1, node2)
-            graph.nodes[node1]['color'] = 'red'
-            graph.nodes[node2]['color'] = 'red'
-            graph.nodes[node1]['endpoint'] = True          ## maybe remove?
-            graph.nodes[node2]['endpoint'] = True          ## maybe remove?
-            endpoints.append(node1)
-            endpoints.append(node2)
-        else:
-            for node in component:
-                if graph.degree(node) == 1:
-                    graph.nodes[node]['color'] = 'red'
-                    graph.nodes[node]['endpoint'] = True   ## maybe remove?
-                    endpoints.append(node)
-
     return graph, endpoints
 
 def node_map(img, img_name_ext, debug=False, save=False):
@@ -410,10 +454,10 @@ def node_map(img, img_name_ext, debug=False, save=False):
     graph = init_edges(graph)
 
     # Optimize graph by roming redundant nodes, edges, and negligable disjoint sections
-    graph = optimize_graph(graph)
+    graph, endpoints = optimize_graph(graph)
 
     # Identify and mark endpoints
-    graph, endpoints = get_endpoints(graph)
+    # graph, endpoints = get_endpoints(graph)
     
     # debug output
     if debug:
