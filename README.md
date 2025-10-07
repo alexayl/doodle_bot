@@ -1,6 +1,13 @@
 # Doodle Bot
 
-A device for autonomous whiteboard management.
+DoodleBot device for autonomous whiteboard management.
+
+This repository is setup as a **monorepo** that contains the code for the different subsystems that are flashed to different devices. Please see the links below for each subsystems' README:
+
+- [Firmware](firmware/README.md) (Alex Aylward and Jain Iftesam) is responsible for all of the code on the device.
+- [CV Software](cv_software/README.md) (Trevor Antle) is responsible for...
+- [Pathfinding](pathfinding/README.md) (Tom Concannon) is responsible for.
+
 
 
 ## Setup
