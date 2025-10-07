@@ -294,7 +294,7 @@ def rm_edges(graph: nx.Graph) -> nx.Graph:
 
     return graph
 
-def rm_disjoint_sections(graph: nx.Graph, min_size: int) -> nx.Graph:
+def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=10, max_node_num: int=10000) -> nx.Graph:
     """
     Remove small disjoint sections from the graph.
 
@@ -308,13 +308,17 @@ def rm_disjoint_sections(graph: nx.Graph, min_size: int) -> nx.Graph:
 
     # merge disjoint sections
     component_id = 0
-    for component in list(nx.connected_components(graph)):
-        if len(component) < min_size:
-            graph.remove_nodes_from(component)
-        else:
-            component_id += 1
-            for node in component:
-                graph.nodes[node]['componentID'] = component_id
+    component_size = min_component_size
+    while graph.number_of_nodes() > max_node_num or component_size == min_component_size and \
+          not nx.is_connected(graph):
+        for component in list(nx.connected_components(graph)):
+            if len(component) < component_size:
+                graph.remove_nodes_from(component)
+            else:
+                component_id += 1
+                for node in component:
+                    graph.nodes[node]['componentID'] = component_id
+        component_size += 10
 
     return graph
 
@@ -333,7 +337,7 @@ def optimize_graph(graph: nx.Graph) -> nx.Graph:
 
     graph = rm_nodes(graph)
     graph = rm_edges(graph)
-    graph = rm_disjoint_sections(graph, 5)
+    graph = rm_disjoint_sections(graph)
     
     return graph
 
