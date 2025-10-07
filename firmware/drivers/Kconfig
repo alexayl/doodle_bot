@@ -5,4 +5,5 @@ menu "Drivers"
 rsource "sensor/Kconfig"
 rsource "servo/Kconfig"
 rsource "led/Kconfig"
+rsource "buzzer/Kconfig"
 endmenu

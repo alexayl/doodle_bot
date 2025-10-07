@@ -133,6 +133,16 @@ test-led: _verify_workspace clean
     -DCONFIG_LED_TEST=y
   west flash --build-dir build
 
+test-buzzer: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_BUZZER_TEST=y
+  west flash --build-dir build
+
 
 # ------------------
 #  Defaults

@@ -28,5 +28,12 @@ config LED_TEST
 	  doodle bot application. This allows testing the LED driver in isolation.
 	  Uses local LED driver instead of Zephyr's built-in driver.
 
+config BUZZER_TEST
+	bool "Build buzzer test instead of main application"
+	select BUZZER
+	help
+	  When enabled, builds the buzzer test application instead of the main
+	  doodle bot application. This allows testing the buzzer driver in isolation.
+
 module = APP
 module-str = APP

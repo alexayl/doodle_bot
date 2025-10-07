@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Doodle Bot Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: Simple GPIO-controlled buzzer
+
+compatible: "gpio-buzzer"
+
+include: base.yaml
+
+properties:
+  gpios:
+    required: true
+    type: phandle-array
+    description: GPIO pin controlling the buzzer
