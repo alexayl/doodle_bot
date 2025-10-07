@@ -11,7 +11,7 @@ ESP_BOARD        := "esp32_devkitc/esp32/procpu"
 ESP_PORT         := if os() == "windows" { "COM5" } else { "/dev/ttyUSB0" }          # adjust - check device for actual port
 
 NRF_BOARD       := "nrf52840dk/nrf52840"
-NRF_PORT        := if os() == "windows" { "COM4" } else { "/dev/ttyACM0" }
+NRF_PORT        := if os() == "windows" { "COM7" } else { "/dev/ttyACM0" }
 
 CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 
@@ -121,6 +121,26 @@ test-servo: _verify_workspace clean
     app \
     {{CMAKE_CACHE_ARGS}} \
     -DCONFIG_SERVO_TEST=y
+  west flash --build-dir build
+
+test-led: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_LED_TEST=y
+  west flash --build-dir build
+
+test-buzzer: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_BUZZER_TEST=y
   west flash --build-dir build
 
 
