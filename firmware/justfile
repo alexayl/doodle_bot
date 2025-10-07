@@ -92,6 +92,16 @@ build-blinky:
     {{CMAKE_CACHE_ARGS}} \
     -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/zephyr/samples/basic/blinky_pwm/boards/nrf52840dk_nrf52840.overlay"
 
+build-ble: clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    zephyr/samples/bluetooth/peripheral_nus \
+    {{CMAKE_CACHE_ARGS}} 
+
+run-ble: build-ble flash-nrf monitor-nrf
+
 
 # TODO: add overlay file for nRF52840
 
