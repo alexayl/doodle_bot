@@ -78,7 +78,8 @@ def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug
 
     return img
 
-def scale_to_canvas(img, img_name_ext, canvas_size=(1000, 1460), padding_percentage=0.05, debug=False, save=False):
+# 1000, 1460
+def scale_to_canvas(img, img_name_ext, canvas_size=(500, 500), padding_percentage=0.05, debug=False, save=False):
     """
     Scale an image to fit within a specified canvas size while maintaining 
     aspect ratio.
@@ -388,7 +389,7 @@ def collinearity_pruning(graph: nx.Graph) -> nx.Graph:
 
     return graph
                     
-def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=5, max_node_num: int=10000) -> nx.Graph:
+def rm_disjoint_sections(graph: nx.Graph, min_component_size: int=5, max_node_num: int=5000) -> nx.Graph:
     """
     Remove small disjoint sections from the graph.
 
@@ -447,6 +448,7 @@ def node_map(img, img_name_ext, debug=False, save=False):
 
     Returns:
         networkx.Graph: Graph representation of the image edges.
+        list: List of endpoint nodes.
     """
 
     # Initialize graph with nodes and edges
@@ -488,7 +490,7 @@ def node_map(img, img_name_ext, debug=False, save=False):
             save_image(fig, "node_map_" + img_name, "outputs/node_map/", extension=".png")
         plt.close(fig)
         
-    return graph
+    return graph, endpoints
 
 def img2graph(img_name, debug=[False, False, False, False],
               save=[False, False, False, False]):
@@ -503,14 +505,15 @@ def img2graph(img_name, debug=[False, False, False, False],
         
         Returns:
             networkx.Graph: Graph representation of the image edges.
+
     """
     
     img_name_ext = img_name + ".png"
     img = load_image(img_name, img_name_ext, debug=debug[0], save=save[0])
     img_scaled = scale_to_canvas(img, img_name_ext, debug=debug[1], save=save[1])
     img_edge = edge_map(img_scaled, img_name_ext, debug=debug[2], save=save[2])
-    img_graph = node_map(img_edge, img_name_ext, debug=debug[3], save=save[3])
-    return img_graph
+    img_graph, endpoints = node_map(img_edge, img_name_ext, debug=debug[3], save=save[3])
+    return img_graph, endpoints
 
 if __name__ == "__main__":
 
