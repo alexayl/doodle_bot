@@ -1,23 +1,67 @@
 / {
-    servo: servo {
+    /* Servo motor for eraser control - P0.13 PWM */
+    servo_eraser: servo_eraser {
         compatible = "doodle-servo";
-        pwms = <&pwm0 0 20000000 0>; /* 20ms period, normal polarity */
+        pwms = <&pwm0 0 20000000 0>; /* 20ms period, normal polarity - P0.13 */
+        label = "SERVO_ERASER";
     };
 
+    /* Servo motor for marker control - P0.12 PWM */
+    servo_marker: servo_marker {
+        compatible = "doodle-servo";
+        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.12 */
+        label = "SERVO_MARKER";
+    };
+
+    /* Left stepper motor via A4988 driver */
+    stepper_left: stepper_left {
+        compatible = "stepper-driver";
+        step-gpio = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
+        direction-gpio = <&gpio0 3 GPIO_ACTIVE_HIGH>; /* P0.03 - Direction control */
+        enable-gpio = <&gpio0 4 GPIO_ACTIVE_LOW>;     /* P0.04 - Enable/disable */
+        label = "LEFT_STEPPER";
+        steps-per-revolution = <200>;
+        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
+        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
+        acceleration = <1000>;        /* Steps/sec² */
+    };
+
+    /* Right stepper motor via A4988 driver */
+    stepper_right: stepper_right {
+        compatible = "stepper-driver";
+        step-gpio = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
+        direction-gpio = <&gpio0 6 GPIO_ACTIVE_HIGH>; /* P0.06 - Direction control */
+        enable-gpio = <&gpio0 7 GPIO_ACTIVE_LOW>;     /* P0.07 - Enable/disable */
+        label = "RIGHT_STEPPER";
+        steps-per-revolution = <200>;
+        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
+        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
+        acceleration = <1000>;        /* Steps/sec² */
+    };
+
+    /* GPIO LED configuration */
     leds {
         compatible = "gpio-leds";
         led1: led_1 {
             gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>; /* P0.14 - LED2 on nRF52840 DK */
+            label = "STATUS_LED";
         };
     };
 
-    aliases {
-        buzzer0 = &buzzer;
-    };
-
+    /* GPIO Buzzer configuration */
     buzzer: buzzer {
         compatible = "gpio-buzzer";
         gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>; /* P0.15 - GPIO15 for buzzer */
+        label = "BUZZER";
+    };
+
+    aliases {
+        stepper-left = &stepper_left;
+        stepper-right = &stepper_right;
+        servo-eraser = &servo_eraser;
+        servo-marker = &servo_marker;
+        led0 = &led1;
+        buzzer0 = &buzzer;
     };
 };
 
@@ -32,13 +76,15 @@
 &pinctrl {
     pwm0_default: pwm0_default {
         group1 {
-            psels = <NRF_PSEL(PWM_OUT0, 0, 13)>; /* P0.13 - LED1 on nRF52840 DK */
+            psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 12)>;  /* P0.12 - Servo Marker PWM */
         };
     };
 
     pwm0_sleep: pwm0_sleep {
         group1 {
-            psels = <NRF_PSEL(PWM_OUT0, 0, 13)>;
+            psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 12)>;  /* P0.12 - Servo Marker PWM */
             low-power-enable;
         };
     };
