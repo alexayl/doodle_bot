@@ -22,7 +22,7 @@ config SERVO_TEST
 
 config LED_TEST
 	bool "Build LED test instead of main application"
-	select LED
+	select LOCAL_LED_GPIO
 	help
 	  When enabled, builds the LED test application instead of the main
 	  doodle bot application. This allows testing the LED driver in isolation.

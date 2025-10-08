@@ -6,8 +6,6 @@
 #ifndef BUZZER_H
 #define BUZZER_H
 
-#include <zephyr/kernel.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,33 +13,28 @@ extern "C" {
 /**
  * @brief Simple GPIO Buzzer Driver
  * 
- * Provides basic on/off control for active buzzers
- * connected to GPIO pins.
+ * Minimal buzzer control for GPIO-connected active buzzers.
  */
 
 /**
- * @brief Initialize the buzzer driver
- * @return 0 on success, negative error code on failure
+ * @brief Initialize the buzzer GPIO pin
  */
-int buzzer_init(void);
+void buzzer_init(void);
 
 /**
  * @brief Turn buzzer on
- * @return 0 on success, negative error code on failure
  */
-int buzzer_on(void);
+void buzzer_on(void);
 
 /**
  * @brief Turn buzzer off
- * @return 0 on success, negative error code on failure
  */
-int buzzer_off(void);
+void buzzer_off(void);
 
 /**
  * @brief Toggle buzzer state
- * @return 0 on success, negative error code on failure
  */
-int buzzer_toggle(void);
+void buzzer_toggle(void);
 
 #ifdef __cplusplus
 }
