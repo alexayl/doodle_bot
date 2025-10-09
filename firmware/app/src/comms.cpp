@@ -2,7 +2,7 @@
 #include "comms.h"
 #include "navigation.h"
 #include <stdbool.h>
-#include <iostream>
+#include <stdio.h> // Use printf instead of iostream
 
 // #define TEST_CODE
 
@@ -39,7 +39,7 @@ void comms_thread(void *nav_instr_queue, void *arg2, void *arg3) {
 
     while(1) {
 
-        std::cout << "Sanity check comms thread!" << std::endl;
+        printf("Sanity check comms thread!\n");
         static uint8_t count;
 
 
@@ -52,7 +52,7 @@ void comms_thread(void *nav_instr_queue, void *arg2, void *arg3) {
             // get data
             // pull from gat
             count += 1;
-            std::cout << count << " messages sent." << std::endl;
+            printf("%d messages sent.\n", count);
             void *next_instr = pull_next_instr();
             k_msgq_put(q, next_instr, K_FOREVER);
         } else {

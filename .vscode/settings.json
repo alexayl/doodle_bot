@@ -6,6 +6,8 @@
         "sensor.h": "c",
         "app_version.h": "c",
         "printk.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "iosfwd": "cpp"
     },
+    "idf.portWin": "COM7",
 }

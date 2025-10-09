@@ -1,0 +1,9 @@
+# Copyright (c) 2025 Doodle Bot Project
+# SPDX-License-Identifier: Apache-2.0
+
+config LOCAL_LED_GPIO
+	bool "Local LED GPIO Driver"
+	depends on GPIO
+	help
+	  Local copy of Zephyr's LED GPIO driver for testing.
+	  Provides basic LED control functionality.

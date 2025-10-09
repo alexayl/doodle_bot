@@ -5,7 +5,37 @@ project(doodle_bot)
 
 project(app LANGUAGES C CXX)
 
-file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
+# Choose between main app sources or test applications
+if(CONFIG_LED_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/led/led_control.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/led/led_gpio.c
+    )
+elseif(CONFIG_BUZZER_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/buzzer/buzzer_test.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/buzzer.c
+    )
+elseif(CONFIG_SERVO_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
+    )
+else()
+    file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
+    target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
+endif()
 
-target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)
+
+# Add custom servo driver directly to the application
+if(CONFIG_SERVO)
+    target_sources(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c)
+    target_include_directories(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo)
+endif()
+
+# Add specific flags for x86 platform to handle floating point
+if(CONFIG_X86)
+    target_compile_options(app PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-m32 -mno-sse -mno-mmx>
+    )
+endif()

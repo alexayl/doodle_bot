@@ -1,20 +1,38 @@
+# Cross-platform shell configuration
+# Windows uses PowerShell by default; Unix recipes use shebang to override when needed
+set shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
 # ------------------
 #  Configurables
 # ------------------
 SIM_BOARD        := "qemu_x86"
 
-ESP_BOARD        := "esp32s3_devkitc/esp32s3/procpu"
-ESP_PORT         := "/dev/ttyUSB0"          # adjust
+ESP_BOARD        := "esp32_devkitc/esp32/procpu"
+ESP_PORT         := if os() == "windows" { "COM5" } else { "/dev/ttyUSB0" }          # adjust - check device for actual port
 
 NRF_BOARD       := "nrf52840dk/nrf52840"
+NRF_PORT        := if os() == "windows" { "COM7" } else { "/dev/ttyACM0" }
 
 CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 
 # ------------------
 #  Helpers
 # ------------------
+
+# Cross-platform workspace verification
 _verify_workspace:
-  test -d .west || { echo "ERROR: .west not found here. Ensure in firmware/ and README installation instructions have been followed."; exit 1; }
+  @just _verify-{{os()}}
+
+_verify-windows:
+  @if (!(Test-Path ".west")) { Write-Host "ERROR: .west not found here. Ensure in firmware/ and README installation instructions have been followed." -ForegroundColor Red; exit 1 }
+
+_verify-linux:
+  #!/bin/bash
+  test -d .west || (echo "ERROR: .west not found here. Ensure in firmware/ and README installation instructions have been followed." && exit 1)
+
+_verify-macos:
+  #!/bin/bash
+  test -d .west || (echo "ERROR: .west not found here. Ensure in firmware/ and README installation instructions have been followed." && exit 1)
 
 # ------------------
 #  Sim (QEMU)
@@ -42,7 +60,7 @@ build-esp32: _verify_workspace clean
     -d build \
     app \
     {{CMAKE_CACHE_ARGS}} \
-    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/app/boards/esp32s3_devkitc.overlay"
+    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/app/boards/esp32_devkitc_wroom.overlay"
 
 flash-esp32:
   west flash --build-dir build
@@ -63,7 +81,19 @@ build-nrf: _verify_workspace clean
     -b "{{NRF_BOARD}}" \
     -d build \
     app \
-    {{CMAKE_CACHE_ARGS}}
+    {{CMAKE_CACHE_ARGS}} \
+    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/app/boards/nrf52840dk_nrf52840.overlay"
+
+
+build-blinky:
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    zephyr/samples/basic/blinky_pwm \
+    {{CMAKE_CACHE_ARGS}} \
+    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/zephyr/samples/basic/blinky_pwm/boards/nrf52840dk_nrf52840.overlay"
+
 
 # TODO: add overlay file for nRF52840
 
@@ -71,7 +101,7 @@ flash-nrf:
   west flash --build-dir build
 
 monitor-nrf:
-  python -m serial.tools.miniterm "/dev/ttyACM0" 115200
+  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
 
 
 run-nrf: build-nrf flash-nrf monitor-nrf
@@ -83,9 +113,52 @@ test: clean
   west build -b native_sim tests/state_machine
   west build -t run
 
+test-servo: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_SERVO_TEST=y
+  west flash --build-dir build
+
+test-led: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_LED_TEST=y
+  west flash --build-dir build
+
+test-buzzer: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_BUZZER_TEST=y
+  west flash --build-dir build
+
+
 # ------------------
 #  Defaults
 # ------------------
 
+# Cross-platform clean command
 clean:
+  @just clean-{{os()}}
+
+clean-windows:
+  if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+
+clean-linux:
+  #!/bin/bash
+  rm -rf build
+
+clean-macos:
+  #!/bin/bash
   rm -rf build

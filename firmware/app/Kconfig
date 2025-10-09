@@ -10,5 +10,30 @@ menu "Zephyr"
 source "Kconfig.zephyr"
 endmenu
 
+# Include out-of-tree drivers
+source "../drivers/Kconfig"
+
+config SERVO_TEST
+	bool "Build servo test instead of main application"
+	select SERVO
+	help
+	  When enabled, builds the servo test application instead of the main
+	  doodle bot application. This allows testing the servo driver in isolation.
+
+config LED_TEST
+	bool "Build LED test instead of main application"
+	select LOCAL_LED_GPIO
+	help
+	  When enabled, builds the LED test application instead of the main
+	  doodle bot application. This allows testing the LED driver in isolation.
+	  Uses local LED driver instead of Zephyr's built-in driver.
+
+config BUZZER_TEST
+	bool "Build buzzer test instead of main application"
+	select BUZZER
+	help
+	  When enabled, builds the buzzer test application instead of the main
+	  doodle bot application. This allows testing the buzzer driver in isolation.
+
 module = APP
 module-str = APP

@@ -1,0 +1,21 @@
+# Devicetree binding for doodle_servo driver
+
+description: Simple servo motor driver using PWM
+
+compatible: "doodle-servo"
+
+include: base.yaml
+
+properties:
+  pwms:
+    type: phandle-array
+    required: true
+    description: |
+      PWM specifier for the servo motor.
+      The PWM period should be 20ms (20000000 ns) for standard servos.
+      Example: pwms = <&pwm0 0 20000000 0>;
+
+pwm-cells:
+  - channel
+  - period
+  - flags

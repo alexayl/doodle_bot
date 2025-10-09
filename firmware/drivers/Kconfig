@@ -2,5 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 menu "Drivers"
-rsource "sensor/Kconfig"
+rsource "servo/Kconfig"
+rsource "led/Kconfig"
+rsource "buzzer/Kconfig"
+rsource "stepper/Kconfig"
 endmenu
