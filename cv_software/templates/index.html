@@ -3,55 +3,205 @@
 <head>
   <meta charset="utf-8"/>
   <title>DoodleBot CV</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body { font-family: Arial, sans-serif; background:#f5f5f5; margin:0; }
-    header { background:#111; color:#fff; padding:12px 20px; display:flex; gap:16px; align-items:center; }
-    a.nav { color:#fff; text-decoration:none; padding:6px 10px; border-radius:6px; background:#333; }
-    a.nav.active { background:#4a90e2; }
-    main { max-width: 960px; margin: 24px auto; background:#fff; padding:20px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
-    .stream { display:flex; justify-content:center; }
-    .error { color:#b00020; margin: 8px 0; }
-    form { margin: 16px 0; }
-    button { padding:8px 12px; border:0; border-radius:8px; background:#4a90e2; color:#fff; cursor:pointer; }
+    :root{
+      --bg:#0e1113; --panel:#121417; --txt:#e6e8eb; --muted:#9aa3ad; --brand:#4a90e2;
+      --bd:#22262b; --radius:12px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:var(--bg); color:var(--txt);
+    }
+
+    /* Header (simple, no effects) */
+    .hdr{border-bottom:1px solid var(--bd); background:#0f1215;}
+    .hdr-inner{
+      max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; gap:12px; align-items:center;
+    }
+    .brand{font-weight:700; padding:6px 8px; border:1px solid var(--bd); border-radius:8px;}
+    .nav{margin-left:auto; display:flex; gap:6px;}
+    a.tab{
+      text-decoration:none; color:var(--txt); font-weight:600; font-size:.95rem;
+      padding:8px 10px; border-radius:8px; border:1px solid var(--bd);
+    }
+    a.tab.active{background:var(--brand); border-color:var(--brand); color:#fff}
+
+    /* Main + panels */
+    .wrap{max-width:1080px; margin:20px auto; padding:0 16px 32px}
+    .panel{background:var(--panel); border:1px solid var(--bd); border-radius:var(--radius); overflow:hidden}
+    .panel-hd{padding:14px 16px; border-bottom:1px solid var(--bd); display:flex; gap:8px; align-items:baseline}
+    .title{font-size:1.1rem; font-weight:750}
+    .sub{color:var(--muted); font-size:.95rem}
+    .panel-bd{padding:16px}
+    .kicker{color:var(--muted); font-size:.85rem; text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px}
+
+    /* Stream */
+    .stream-wrap{border:1px solid var(--bd); border-radius:10px; overflow:hidden; background:#0c0f12}
+    .stream-aspect{display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#0c0f12}
+
+    /* Layout */
+    .grid{display:grid; gap:16px}
+    @media (min-width: 900px){ .grid-2{grid-template-columns:1.25fr .75fr} }
+
+    /* Forms + buttons */
+    form{margin:0}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+    .file{position:relative; overflow:hidden; border-radius:8px; border:1px dashed var(--bd); padding:8px 12px; color:var(--muted)}
+    .file input[type="file"]{position:absolute; inset:0; opacity:0; cursor:pointer}
+    .btn{
+      border:1px solid var(--bd); background:var(--brand); color:#fff; font-weight:700;
+      padding:9px 12px; border-radius:8px; cursor:pointer;
+    }
+    .btn.secondary{background:#1a1e22; color:var(--txt)}
+    .btn.ghost{background:transparent; color:var(--txt)}
+    .help{color:var(--muted); font-size:.92rem}
+    .alert{margin:8px 0; padding:10px 12px; border-radius:8px; border:1px solid #5a1f22; background:#1a1213; color:#f2c6c8}
+
+    .note{color:var(--muted); font-size:.9rem; margin-top:8px}
   </style>
 </head>
 <body>
-<header>
-  <div style="font-weight:bold;">DoodleBot CV</div>
-  <a class="nav {{ 'active' if page=='home' else '' }}" href="{{ url_for('home') }}">Home</a>
-  <a class="nav {{ 'active' if page=='erase' else '' }}" href="{{ url_for('erase') }}">Erase Mode</a>
-  <a class="nav {{ 'active' if page=='draw' else '' }}" href="{{ url_for('draw') }}">Draw Mode</a>
-</header>
-
-<main>
-  {% if page == 'home' %}
-    <h2>Welcome</h2>
-    <p>Choose a mode:</p>
-    <p><a class="nav" href="{{ url_for('erase') }}">Erase Mode</a> or <a class="nav" href="{{ url_for('draw') }}">Draw Mode</a></p>
-
-  {% elif page == 'erase' %}
-    <h2>Erase Mode — Live Stream</h2>
-    <div class="stream">
-      <img src="{{ url_for('stream') }}" alt="Live stream"/>
+  <header class="hdr">
+    <div class="hdr-inner">
+      <div class="brand">DoodleBot CV</div>
+      <nav class="nav" aria-label="Main">
+        <a class="tab {{ 'active' if page=='home' else '' }}" href="{{ url_for('home') }}">Home</a>
+        <a class="tab {{ 'active' if page=='erase' else '' }}" href="{{ url_for('erase') }}">Erase</a>
+        <a class="tab {{ 'active' if page=='draw' else '' }}" href="{{ url_for('draw') }}">Draw</a>
+      </nav>
     </div>
+  </header>
 
-  {% elif page == 'draw' %}
-    <h2>Draw Mode</h2>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <main class="wrap">
+    {% if page == 'home' %}
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="title">Welcome</div>
+          <div class="sub">Choose a mode to begin</div>
+        </div>
+        <div class="panel-bd">
+          <div class="row" style="margin-bottom:6px">
+            <a class="btn" href="{{ url_for('erase') }}">Start Erase</a>
+            <a class="btn secondary" href="{{ url_for('draw') }}">Start Draw</a>
+          </div>
+          <p class="help">Draw uploads a target image, then the live stream starts. Erase starts the stream immediately.</p>
+        </div>
+      </section>
 
-    {% if not has_target %}
-      <p>Upload a target image, then the stream will start.</p>
-      <form action="{{ url_for('draw') }}" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" accept="image/*" required>
-        <button type="submit">Upload & Start</button>
-      </form>
-    {% else %}
-      <p>Target loaded: <strong>{{ target }}</strong></p>
-      <div class="stream">
-        <img src="{{ url_for('stream') }}" alt="Live stream"/>
-      </div>
+    {% elif page == 'erase' %}
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="title">Erase Mode</div>
+          <div class="sub">Live stream</div>
+        </div>
+        <div class="panel-bd grid grid-2">
+          <div>
+            <div class="stream-wrap">
+              <img
+                id="stream"
+                class="stream-aspect"
+                src="{{ url_for('stream') }}?mode=erase"
+                alt="Live stream"
+                fetchpriority="high"
+                decoding="sync"
+                loading="eager"
+                referrerpolicy="no-referrer"
+              />
+            </div>
+            <div class="row" style="margin-top:8px">
+              <button type="button" class="btn ghost" id="reloadBtn">Reload</button>
+              <button type="button" class="btn secondary" id="pauseBtn">Pause</button>
+              <button type="button" class="btn secondary" id="resumeBtn" disabled>Resume</button>
+            </div>
+            <p class="note">Reload busts cache; Pause clears the stream source.</p>
+          </div>
+          <aside>
+            <div class="kicker">Details</div>
+            <p class="help">Camera feed aligned to board reference. Consumed by CV for homography and pose.</p>
+          </aside>
+        </div>
+      </section>
+
+    {% elif page == 'draw' %}
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="title">Draw Mode</div>
+          <div class="sub">Upload target, then stream</div>
+        </div>
+        <div class="panel-bd grid grid-2">
+          <div>
+            {% if error %}
+              <div class="alert" role="alert">⚠ {{ error }}</div>
+            {% endif %}
+
+            {% if not has_target %}
+              <div class="kicker">Target</div>
+              <form action="{{ url_for('draw') }}" method="post" enctype="multipart/form-data" class="row" style="margin-bottom:12px">
+                <label class="file">
+                  <input type="file" name="file" accept="image/*" required aria-label="Choose target image">
+                  Choose image…
+                </label>
+                <button type="submit" class="btn">Upload & Start</button>
+              </form>
+              <p class="help">Common image formats supported.</p>
+            {% else %}
+              <div class="kicker">Target</div>
+              <p class="help" style="margin-top:4px">Loaded: <strong>{{ target }}</strong></p>
+              <div class="stream-wrap" style="margin-top:8px">
+                <img id="stream" class="stream-aspect" src="{{ url_for('stream') }}" alt="Live stream"/>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button type="button" class="btn ghost" id="reloadBtn">Reload</button>
+                <button type="button" class="btn secondary" id="pauseBtn">Pause</button>
+                <button type="button" class="btn secondary" id="resumeBtn" disabled>Resume</button>
+              </div>
+            {% endif %}
+          </div>
+
+          <aside>
+            <div class="kicker">Tips</div>
+            <ul class="help" style="margin:6px 0 0; padding-left:18px; line-height:1.5">
+              <li>Ensure corners and fiducials are visible.</li>
+              <li>Minimize glare.</li>
+              <li>Keep camera fixed during alignment.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
     {% endif %}
-  {% endif %}
-</main>
+  </main>
+
+  <script>
+    // Minimal controls: no polling, no listeners
+    (function(){
+      const img = document.getElementById('stream');
+      const reloadBtn = document.getElementById('reloadBtn');
+      const pauseBtn = document.getElementById('pauseBtn');
+      const resumeBtn = document.getElementById('resumeBtn');
+      if(!img) return;
+
+      function bust(){
+        const u = new URL(img.src, location.href);
+        u.searchParams.set('_', Date.now().toString());
+        img.src = u.toString();
+      }
+
+      reloadBtn && reloadBtn.addEventListener('click', bust);
+      pauseBtn && pauseBtn.addEventListener('click', () => {
+        img.dataset.prev = img.src;
+        img.src = 'about:blank';
+        pauseBtn.disabled = true;
+        if(resumeBtn) resumeBtn.disabled = false;
+      });
+      resumeBtn && resumeBtn.addEventListener('click', () => {
+        if(img.dataset.prev){ img.src = img.dataset.prev; }
+        resumeBtn.disabled = true;
+        if(pauseBtn) pauseBtn.disabled = false;
+      });
+    })();
+  </script>
 </body>
 </html>

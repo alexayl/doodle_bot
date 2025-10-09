@@ -175,7 +175,7 @@ class CVFollower:
                 # No pose right now: stop and bail if the reading has gone stale
                 self.bt.stop()
                 time.sleep(0.05)
-                if self._stale():   # <-- add this
+                if self._stale():
                     return False
                 continue
 
@@ -211,7 +211,6 @@ class CVFollower:
             self.bt.rotate(rot_cmd)
             self.bt.move(fwd_cmd, left_cmd)
 
-            # Let it move; then re-measure on the next loop
             time.sleep(0.08)
 
             if self._stale():
