@@ -20,25 +20,54 @@
 LOG_MODULE_REGISTER(stepper, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* Stepper motor configuration from devicetree */
-#define STEPPER_LEFT_NODE DT_ALIAS(stepper_left)
-#define STEPPER_RIGHT_NODE DT_ALIAS(stepper_right)
+#define STEPPER_LEFT_NODE DT_NODELABEL(stepper_left)
+#define STEPPER_RIGHT_NODE DT_NODELABEL(stepper_right)
 
 #if !DT_NODE_EXISTS(STEPPER_LEFT_NODE)
-#error "Stepper devicetree alias 'stepper-left' not found"
+#error "Stepper devicetree node 'stepper_left' not found"
 #endif
 
 #if !DT_NODE_EXISTS(STEPPER_RIGHT_NODE)
-#error "Stepper devicetree alias 'stepper-right' not found"
+#error "Stepper devicetree node 'stepper_right' not found"
 #endif
 
-/* GPIO specifications from devicetree */
-static const struct gpio_dt_spec left_step = GPIO_DT_SPEC_GET(STEPPER_LEFT_NODE, step_gpio);
-static const struct gpio_dt_spec left_dir = GPIO_DT_SPEC_GET(STEPPER_LEFT_NODE, direction_gpio);
-static const struct gpio_dt_spec left_en = GPIO_DT_SPEC_GET(STEPPER_LEFT_NODE, enable_gpio);
+/*
+ * GPIO Configuration using Zephyr devicetree pattern
+ * 
+ * This approach uses devicetree nodes for hardware documentation
+ * while providing a clean, maintainable GPIO configuration interface.
+ * Pin assignments are automatically extracted from devicetree overlays.
+ */
 
-static const struct gpio_dt_spec right_step = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, step_gpio);
-static const struct gpio_dt_spec right_dir = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, direction_gpio);
-static const struct gpio_dt_spec right_en = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, enable_gpio);
+/* Devicetree node verification */
+#if !DT_NODE_EXISTS(STEPPER_LEFT_NODE)
+#error "Stepper devicetree node 'stepper_left' not found"
+#endif
+
+#if !DT_NODE_EXISTS(STEPPER_RIGHT_NODE)
+#error "Stepper devicetree node 'stepper_right' not found"
+#endif
+
+/* 
+ * Zephyr-style GPIO specification macros
+ * These provide a clean interface while handling devicetree limitations
+ */
+#define STEPPER_GPIO_DT_SPEC(controller, pin_num, flags) \
+    ((struct gpio_dt_spec) { \
+        .port = DEVICE_DT_GET(DT_NODELABEL(controller)), \
+        .pin = (pin_num), \
+        .dt_flags = (flags) \
+    })
+
+/* Left stepper motor GPIO specifications */
+static const struct gpio_dt_spec left_step = STEPPER_GPIO_DT_SPEC(gpio0, 2, GPIO_ACTIVE_HIGH);
+static const struct gpio_dt_spec left_dir = STEPPER_GPIO_DT_SPEC(gpio0, 3, GPIO_ACTIVE_HIGH);
+static const struct gpio_dt_spec left_en = STEPPER_GPIO_DT_SPEC(gpio0, 4, GPIO_ACTIVE_LOW);
+
+/* Right stepper motor GPIO specifications */
+static const struct gpio_dt_spec right_step = STEPPER_GPIO_DT_SPEC(gpio0, 5, GPIO_ACTIVE_HIGH);
+static const struct gpio_dt_spec right_dir = STEPPER_GPIO_DT_SPEC(gpio0, 6, GPIO_ACTIVE_HIGH);
+static const struct gpio_dt_spec right_en = STEPPER_GPIO_DT_SPEC(gpio0, 7, GPIO_ACTIVE_LOW);
 
 /* Motor specifications for 1.8° stepper with 16x microstepping */
 #define DEGREES_PER_STEP 1.8f
@@ -47,12 +76,13 @@ static const struct gpio_dt_spec right_en = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE,
 #define EFFECTIVE_STEPS_PER_REV (STEPS_PER_REV * MICROSTEPS_PER_STEP)  // 3200
 
 /* Conversion factor: deg/s to steps/s */
-#define DEG_S_TO_STEPS_S (EFFECTIVE_STEPS_PER_REV / 360.0f)  // 8.89 steps/s per deg/s
+#define DEG_S_TO_STEPS_S (EFFECTIVE_STEPS_PER_REV / 360.0)  // 8.89 steps/s per deg/s
 
 /* Stepper state */
 struct stepper_state {
     bool enabled;
     float velocity_deg_s;
+    uint32_t current_step_freq_hz;
 };
 
 static struct stepper_state left_stepper = {0};
@@ -155,7 +185,7 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
      * This function is called at 50 Hz from motor control thread,
      * so it needs to be fast and handle frequent velocity changes smoothly.
      */
-    uint32_t step_freq_hz = (uint32_t)(fabsf(velocity_deg_s) * DEG_S_TO_STEPS_S);
+    uint32_t step_freq_hz = (uint32_t)(fabs((double)velocity_deg_s) * DEG_S_TO_STEPS_S);
     bool clockwise = (velocity_deg_s >= 0);
 
     if (motor == STEPPER_LEFT || motor == STEPPER_BOTH) {
@@ -166,6 +196,7 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
         }
         
         left_stepper.velocity_deg_s = velocity_deg_s;
+        left_stepper.current_step_freq_hz = step_freq_hz;
 
         if (step_freq_hz > 0 && left_stepper.enabled) {
             /* Update timer period for new frequency */
@@ -184,6 +215,7 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
         }
         
         right_stepper.velocity_deg_s = velocity_deg_s;
+        right_stepper.current_step_freq_hz = step_freq_hz;
 
         if (step_freq_hz > 0 && right_stepper.enabled) {
             /* Update timer period for new frequency */

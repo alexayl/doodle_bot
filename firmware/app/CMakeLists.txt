@@ -20,6 +20,11 @@ elseif(CONFIG_SERVO_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
     )
+elseif(CONFIG_STEPPER_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/stepper/stepper_control.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+    )
 else()
     file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
     target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})

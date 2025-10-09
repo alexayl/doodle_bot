@@ -15,28 +15,24 @@
 
     /* Left stepper motor via A4988 driver */
     stepper_left: stepper_left {
-        compatible = "stepper-driver";
-        step-gpio = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
-        direction-gpio = <&gpio0 3 GPIO_ACTIVE_HIGH>; /* P0.03 - Direction control */
-        enable-gpio = <&gpio0 4 GPIO_ACTIVE_LOW>;     /* P0.04 - Enable/disable */
+        status = "okay";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
+        dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;       /* P0.03 - Direction control */
+        en-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;         /* P0.04 - Enable/disable */
         label = "LEFT_STEPPER";
-        steps-per-revolution = <200>;
-        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
-        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
-        acceleration = <1000>;        /* Steps/sec² */
     };
 
     /* Right stepper motor via A4988 driver */
     stepper_right: stepper_right {
-        compatible = "stepper-driver";
-        step-gpio = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
-        direction-gpio = <&gpio0 6 GPIO_ACTIVE_HIGH>; /* P0.06 - Direction control */
-        enable-gpio = <&gpio0 7 GPIO_ACTIVE_LOW>;     /* P0.07 - Enable/disable */
+        status = "okay";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
+        dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* P0.06 - Direction control */
+        en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* P0.07 - Enable/disable */
         label = "RIGHT_STEPPER";
-        steps-per-revolution = <200>;
-        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
-        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
-        acceleration = <1000>;        /* Steps/sec² */
     };
 
     /* GPIO LED configuration */

@@ -6,6 +6,8 @@
 #ifndef BUZZER_H
 #define BUZZER_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,6 +22,12 @@ extern "C" {
  * @brief Initialize the buzzer GPIO pin
  */
 void buzzer_init(void);
+
+/**
+ * @brief Check if buzzer is ready to use
+ * @return true if buzzer is ready, false otherwise
+ */
+bool buzzer_is_ready(void);
 
 /**
  * @brief Turn buzzer on

@@ -12,8 +12,17 @@ int main(void)
 {
     LOG_INF("Simple Stepper Test - One Revolution");
 
-    // Initialize and enable steppers
-    stepper_init();
+    // Initialize steppers
+    int ret = stepper_init();
+    if (ret != 0) {
+        LOG_ERR("ERROR: Stepper initialization failed: %d", ret);
+        LOG_ERR("Check devicetree: stepper_left and stepper_right nodes with valid GPIO configuration");
+        return -1;
+    }
+    
+    LOG_INF("Stepper motors initialized successfully");
+    
+    // Enable steppers
     stepper_enable(STEPPER_BOTH);
 
     while (1) {

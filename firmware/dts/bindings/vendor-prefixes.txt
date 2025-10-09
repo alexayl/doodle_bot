@@ -1,0 +1,5 @@
+# Copyright (c) 2025 Doodle Bot Project
+# SPDX-License-Identifier: Apache-2.0
+
+# Vendor prefix for Doodle Bot project custom drivers
+doodle	Doodle Bot Project	https://github.com/alexayl/doodle_bot

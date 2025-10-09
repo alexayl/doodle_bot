@@ -47,7 +47,12 @@ int main(void)
     
     /* Check LED device is ready */
     if (!device_is_ready(LED_DEVICE)) {
-        printk("ERROR: LED device not ready\n");
+        printk("ERROR: LED device not ready!\n");
+        printk("Check devicetree: led1 node with valid GPIO configuration\n");
+        return -1;
+    }
+    
+    printk("LED device initialized successfully\n");
         return -1;
     }
     

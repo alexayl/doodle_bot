@@ -35,5 +35,12 @@ config BUZZER_TEST
 	  When enabled, builds the buzzer test application instead of the main
 	  doodle bot application. This allows testing the buzzer driver in isolation.
 
+config STEPPER_TEST
+	bool "Build stepper test instead of main application"
+	select DOODLE_STEPPER
+	help
+	  When enabled, builds the stepper test application instead of the main
+	  doodle bot application. This allows testing the stepper driver in isolation.
+
 module = APP
 module-str = APP
