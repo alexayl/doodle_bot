@@ -1,0 +1,53 @@
+# Copyright (c) 2025 Doodle Bot Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Stepper motor driver module controller (A4988, DRV8825, etc.)
+  
+  Controls stepper motors through dedicated driver modules that
+  handle current control and microstepping. MS pins are hardwired
+  for fixed microstepping configuration.
+
+compatible: "stepper-driver"
+
+properties:
+  step-gpio:
+    type: phandle
+    required: true
+    description: GPIO pin for step pulses
+
+  direction-gpio:
+    type: phandle
+    required: true
+    description: GPIO pin for direction control
+
+  enable-gpio:
+    type: phandle
+    description: GPIO pin for driver enable/disable
+
+  label:
+    type: string
+    description: Human readable string describing the stepper driver
+
+  steps-per-revolution:
+    type: int
+    default: 200
+    description: Full steps per revolution of the motor
+
+  microsteps:
+    type: int
+    default: 16
+    description: |
+      Fixed microstepping factor (1, 2, 4, 8, 16, 32)
+      Set by hardwired MS pins on the driver board
+      Total steps per revolution = steps-per-revolution * microsteps
+
+  max-speed:
+    type: int
+    default: 3200
+    description: Maximum steps per second (including microstepping)
+
+  acceleration:
+    type: int
+    default: 1000
+    description: Acceleration in steps per second squared
