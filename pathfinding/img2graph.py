@@ -325,7 +325,7 @@ def get_endpoints(graph: nx.Graph) -> tuple[nx.Graph, list]:
 
     # identify and mark endpoints
     endpoints = []
-    component_id = 0
+    component_id = 1
     for component in list(nx.connected_components(graph)):
         
         # remove single-node components
@@ -492,7 +492,7 @@ def node_map(img, img_name_ext, debug=False, save=False):
         
     return graph, endpoints
 
-def img2graph(img_name, debug=[False, False, False, False],
+def img2graph(img_name, canvas_size=(1000, 1460), debug=[False, False, False, False],
               save=[False, False, False, False]):
     """
         Convert an image to a graph by processing it through several steps:
@@ -505,12 +505,13 @@ def img2graph(img_name, debug=[False, False, False, False],
         
         Returns:
             networkx.Graph: Graph representation of the image edges.
+            list: List of endpoint nodes.
 
     """
     
     img_name_ext = img_name + ".png"
     img = load_image(img_name, img_name_ext, debug=debug[0], save=save[0])
-    img_scaled = scale_to_canvas(img, img_name_ext, debug=debug[1], save=save[1])
+    img_scaled = scale_to_canvas(img, img_name_ext, canvas_size=canvas_size, debug=debug[1], save=save[1])
     img_edge = edge_map(img_scaled, img_name_ext, debug=debug[2], save=save[2])
     img_graph, endpoints = node_map(img_edge, img_name_ext, debug=debug[3], save=save[3])
     return img_graph, endpoints
@@ -524,6 +525,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     img_name = args.img_name
+
+    canvas_size = (1000, 1460)
 
     debug_all = args.debug
     display_array = [False,   # load_image
@@ -549,6 +552,6 @@ if __name__ == "__main__":
         for file in os.listdir("png/"):
             if file.endswith(".png"):
                 img_name = file[:-4]
-                img2graph(img_name, display_array, save_array)
+                img2graph(img_name, canvas_size, display_array, save_array)
     else:
-        img2graph(img_name, display_array, save_array)
+        img2graph(img_name, canvas_size, display_array, save_array)
