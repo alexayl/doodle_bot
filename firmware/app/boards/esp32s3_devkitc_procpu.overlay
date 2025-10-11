@@ -1,16 +1,9 @@
 / {
-    /* Servo motor for eraser control - GPIO4 PWM */
-    servo_eraser: servo_eraser {
+    /* Servo motor for eraser control - GPIO18 PWM */
+    servo: servo {
         compatible = "doodle-servo";
-        pwms = <&ledc0 0 20000000 0>; /* 20ms period, normal polarity - GPIO4 */
+        pwms = <&ledc0 0 20000000 0>; /* 20ms period, channel 0, normal polarity - GPIO18 */
         label = "SERVO_ERASER";
-    };
-
-    /* Servo motor for marker control - GPIO15 PWM */
-    servo_marker: servo_marker {
-        compatible = "doodle-servo";
-        pwms = <&ledc0 1 20000000 0>; /* 20ms period, normal polarity - GPIO15 */
-        label = "SERVO_MARKER";
     };
 
     /* Left stepper motor via A4988 driver */
@@ -39,7 +32,7 @@
     leds {
         compatible = "gpio-leds";
         led1: led_1 {
-            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>; /* GPIO11 - Status LED */
+            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>; /* GPIO11 - External LED */
             label = "STATUS_LED";
         };
     };
@@ -54,8 +47,7 @@
     aliases {
         stepper-left = &stepper_left;
         stepper-right = &stepper_right;
-        servo-eraser = &servo_eraser;
-        servo-marker = &servo_marker;
+        servo0 = &servo;
         led0 = &led1;
         buzzer0 = &buzzer;
     };
@@ -66,13 +58,19 @@
     pinctrl-0 = <&ledc0_default>;
     pinctrl-names = "default";
     #pwm-cells = <3>;
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0x0>;
+        timer = <0>;
+    };
 };
 
 &pinctrl {
     ledc0_default: ledc0_default {
         group1 {
-            pinmux = <LEDC_CH0_GPIO4>,   /* GPIO4 - Servo Eraser PWM */
-                     <LEDC_CH1_GPIO15>;  /* GPIO15 - Servo Marker PWM */
+            pinmux = <LEDC_CH0_GPIO2>;   /* GPIO2 - Servo PWM on Channel 0 */
             output-enable;
         };
     };

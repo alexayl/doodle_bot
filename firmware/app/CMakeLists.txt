@@ -20,6 +20,10 @@ elseif(CONFIG_SERVO_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
     )
+elseif(CONFIG_SERVO_PWM_TEST)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../pwm_test.cpp
+    )
 elseif(CONFIG_STEPPER_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/stepper/stepper_control.cpp

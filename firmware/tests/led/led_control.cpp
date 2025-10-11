@@ -53,10 +53,8 @@ int main(void)
     }
     
     printk("LED device initialized successfully\n");
-        return -1;
-    }
-    
-    printk("GPIO14 LED driver ready\n");
+    printk("GPIO11 LED driver ready\n");
+    printk("Testing both ACTIVE_HIGH and ACTIVE_LOW configurations...\n");
     
     /* Core firmware loop - sends ON/OFF commands to LED driver */
     led_command_t command = LED_OFF;
