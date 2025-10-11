@@ -1,13 +1,14 @@
 # app/server.py
 from __future__ import annotations
 from flask import Flask, Response, request, jsonify, render_template, redirect, url_for
-import cv2, os, time, threading, signal, math
+import cv2, os, time, threading, signal, math, platform
+from collections import deque
 
-# ---- Imports from your control + CV code ----
+# ---- CV + camera ----
 from app.cv_core import CVPipeline
-from app.control import InstructionQueue, Coordinator, parse_moves_payload, PenCmd
+from app.control import parse_moves_payload
 from app.camera import ThreadedCamera, CameraConfig
-
+from app.bt_link import BTLink
 
 # ---------- Config ----------
 USE_TURBOJPEG = os.getenv("DISABLE_TURBOJPEG", "0") not in ("1", "true", "True")
@@ -19,19 +20,71 @@ os.makedirs("uploads", exist_ok=True)
 
 STATE = {"mode": "erase", "target_image": None}
 
+# ---- Metrics state (rolling windows) ----
+_METRICS = {
+    "t_hist": deque(maxlen=240),   # processing times (s) ~12s at 20Hz
+    "ts_hist": deque(maxlen=240),  # timestamps for Hz
+    "valid_frames": 0,
+    "total_frames": 0,
+    "uptime_pct": 0.0,
+}
+
+def _note_frame(valid: bool, t_proc_s: float):
+    _METRICS["t_hist"].append(t_proc_s)
+    _METRICS["ts_hist"].append(time.monotonic())
+    _METRICS["total_frames"] += 1
+    if valid:
+        _METRICS["valid_frames"] += 1
+    _METRICS["uptime_pct"] = 100.0 * _METRICS["valid_frames"] / max(1, _METRICS["total_frames"])
+
+def _rate_hz() -> float:
+    ts = list(_METRICS["ts_hist"])
+    if len(ts) < 3:
+        return 0.0
+    dur = ts[-1] - ts[0]
+    return 0.0 if dur <= 1e-6 else (len(ts) - 1) / dur
+
+def _median_latency_ms() -> float:
+    arr = sorted(_METRICS["t_hist"])
+    if not arr:
+        return 0.0
+    n = len(arr); mid = n // 2
+    med = arr[mid] if n % 2 else 0.5 * (arr[mid - 1] + arr[mid])
+    return 1000.0 * med
+
 # ---------- Lazy JPEG encoder ----------
 _jpeg = None
 def _get_jpeg():
     global _jpeg
-    if _jpeg is not None: return _jpeg
+    if _jpeg is not None:
+        return _jpeg
     if not USE_TURBOJPEG:
-        _jpeg = False; return _jpeg
+        _jpeg = False
+        return _jpeg
     try:
         from turbojpeg import TurboJPEG
         _jpeg = TurboJPEG()
     except Exception:
         _jpeg = False
     return _jpeg
+
+def _encode_jpeg(frame, quality=65):
+    tj = _get_jpeg()
+    if tj:
+        try:
+            # Use fast DCT + 4:2:0 subsampling for speed
+            return tj.encode(
+                frame,
+                quality=int(quality),
+                jpeg_subsample=2,  # TurboJPEG.TJSAMP_420
+                flags=512          # TurboJPEG.TJFLAG_FASTDCT
+            )
+        except Exception:
+            pass
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    if not ok:
+        return None
+    return buf.tobytes()
 
 # ---------- Threaded frame grabber (lazy singleton) ----------
 _cam = None
@@ -45,78 +98,105 @@ def get_cam() -> ThreadedCamera | None:
             _cam = None
     return _cam
 
-# ---------- Encoding ----------
-def _encode_jpeg(frame, quality=70):
-    tj = _get_jpeg()
-    if tj:
-        try:
-            return tj.encode(frame, quality=int(quality))
-        except Exception:
-            pass
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
-    if not ok: return None
-    return buf.tobytes()
-
-# ---------- Simple BT link (replace with your real one) ----------
-class BTLink:
-    def connect(self): pass
-    def close(self): pass
-    def stop(self): print("[BT] stop")
-    def send_move(self, fwd_mm: float, left_mm: float): print(f"[BT] move fwd={fwd_mm:.1f} left={left_mm:.1f}")
-    def send_rotate(self, rot_rad: float): print(f"[BT] rotate {math.degrees(rot_rad):.1f} deg")
-    def send_pen(self, down: bool): print(f"[BT] pen {'DOWN' if down else 'UP'}")
-
-# ---------- Global CV + Coordinator wiring ----------
+# ---------- Global CV + BLE wiring ----------
 cvp = CVPipeline(cam=None)
-instr_q = InstructionQueue(maxsize=10000)
 bt_link = BTLink()
-coord = Coordinator(instr_q, cvp, bt_link)
 
 _cv_thread = None
+_pose_thread = None
+_pose_thread_stop = False
+
+def _process_frame_once(frame) -> tuple[bool, float]:
+    """
+    Returns (valid_pose: bool, t_proc_seconds).
+    Uses CVPipeline.process_frame if available; otherwise falls back to calibrate+track.
+    """
+    t0 = time.perf_counter()
+    valid = False
+    if hasattr(cvp, "process_frame"):
+        try:
+            valid, _t = cvp.process_frame(frame)
+            t_proc = time.perf_counter() - t0
+            return bool(valid), t_proc
+        except Exception:
+            pass
+    # Fallback: periodic calibrate + track
+    st = cvp.get_state()
+    do_cal = (not st["calibrated"]) or (st["mm_per_px"] is None) or ((time.monotonic() % 2.0) < 0.05)
+    if do_cal:
+        try: cvp.calibrate_board(frame)
+        except Exception: pass
+    try:
+        cvp.update_bot(frame)
+    except Exception:
+        pass
+    st2 = cvp.get_state()
+    valid = bool(st2["calibrated"] and st2["bot_pose"] is not None)
+    t_proc = time.perf_counter() - t0
+    return valid, t_proc
+
 def _cv_worker():
     cam = get_cam()
-    last_calib = 0.0
     while True:
         if cam is None:
-            time.sleep(0.05); cam = get_cam(); continue
+            time.sleep(0.02)
+            cam = get_cam()
+            continue
 
-        # Prefer "good" (sharp) frames when available
+        # Prefer good/sharp frames; keep loop non-blocking
         frame = cam.get_latest_good()
         if frame is None:
-            time.sleep(0.01); continue
+            time.sleep(0.004)
+            continue
 
-        # Calibrate occasionally until good, then keep updating bot pose
-        st = cvp.get_state()
-        now = time.time()
-        if (not st["calibrated"]) or (st["mm_per_px"] is None) or ((now - last_calib) > 2.0):
-            ok = cvp.calibrate_board(frame)
-            if ok: last_calib = now
+        valid, tproc = _process_frame_once(frame)
+        _note_frame(valid, tproc)
 
-        cvp.update_bot(frame)
+        time.sleep(0.004)
 
-        time.sleep(0.02)  # ~50 Hz loop max
+def _pose_publisher():
+    global _pose_thread_stop
+    while not _pose_thread_stop:
+        pose = cvp.get_pose_mm()
+        if pose is not None:
+            (x_mm, y_mm), heading, conf = pose
+            try:
+                bt_link.send_pose(x_mm, y_mm, heading, conf)
+            except Exception as e:
+                print(f"[BT] send_pose error: {e}")
+        time.sleep(0.08)  # ~12.5 Hz telemetry
 
 def _ensure_cv_thread():
-    global _cv_thread
+    global _cv_thread, _pose_thread
     if _cv_thread is None:
         _cv_thread = threading.Thread(target=_cv_worker, daemon=True)
         _cv_thread.start()
-        coord.start()
+        try:
+            if hasattr(bt_link, "connect"):
+                bt_link.connect()
+        except Exception as e:
+            print(f"[BT] connect failed: {e}")
+    if _pose_thread is None:
+        _pose_thread = threading.Thread(target=_pose_publisher, daemon=True)
+        _pose_thread.start()
 
 # ---------- Overlay ----------
 def overlay_fn():
     def _draw(frame):
         st = cvp.get_state()
-        label = f"Mode: {STATE['mode'].upper()}"
+        line1 = f"Mode: {STATE['mode'].upper()}"
         if st["calibrated"]:
             try:
-                label += f" | mm/px: {st['mm_per_px']:.3f} | reproj: {st['board_reproj_err_px']:.2f}"
+                line1 += f" | mm/px: {st['mm_per_px']:.3f} | reproj: {st['board_reproj_err_px']:.2f}"
             except Exception:
                 pass
         else:
-            label += " | CALIBRATING..."
-        cv2.putText(frame, label, (16, 32),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
+            line1 += " | CALIBRATING..."
+
+        line2 = f"Rate: {_rate_hz():.1f} Hz | Median cam→pose: {_median_latency_ms():.0f} ms | Uptime: {_METRICS['uptime_pct']:.1f}%"
+        cv2.putText(frame, line1, (16, 32),  cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2, cv2.LINE_AA)
+        cv2.putText(frame, line2, (16, 64),  cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2, cv2.LINE_AA)
+
         # Draw bot marker (project center back to image)
         if st["bot_pose"] is not None and st["calibrated"]:
             cx, cy = st["bot_pose"]["center_board_px"]
@@ -132,22 +212,39 @@ def overlay_fn():
     return _draw
 
 # ---------- Streaming ----------
-def gen_frames(overlay_factory, quality=70):
+def gen_frames(overlay_factory, quality=65):
     _ensure_cv_thread()
     draw = overlay_factory() if callable(overlay_factory) else overlay_factory
     boundary = b"--frame\r\n"
+    last_ts = 0.0
+
     while True:
         cam = get_cam()
         if cam is None:
-            time.sleep(0.05); continue
-        # For streaming we can show latest (not necessarily "good") to keep UI lively
-        frame = cam.get_latest()
+            time.sleep(0.02)
+            continue
+
+        frame, ts = cam.get_latest_with_ts()
         if frame is None:
-            time.sleep(0.01); continue
-        if draw: frame = draw(frame)
+            time.sleep(0.005)
+            continue
+
+        if ts <= last_ts:
+            time.sleep(0.002)
+            continue
+        last_ts = ts
+
+        if draw:
+            frame = draw(frame)
+
         jpg = _encode_jpeg(frame, quality=quality)
-        if jpg is None: continue
-        yield boundary + b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+        if jpg is None:
+            continue
+
+        yield (boundary +
+               b"Content-Type: image/jpeg\r\n"
+               b"Cache-Control: no-store\r\n\r\n" +
+               jpg + b"\r\n")
 
 @app.after_request
 def _no_buffer(resp):
@@ -189,23 +286,28 @@ def draw():
 
 @app.route("/stream")
 def stream():
-    try: q = int(request.args.get("q", "70"))
-    except ValueError: q = 70
+    try:
+        q = int(request.args.get("q", "65"))
+    except ValueError:
+        q = 65
+    q = max(40, min(q, 90))
     return Response(
-        gen_frames(overlay_fn, quality=max(40, min(q, 95))),
+        gen_frames(overlay_fn, quality=q),
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
-# ---------- Routes (API for control) ----------
+# ---------- Routes (API for firmware passthrough) ----------
 @app.route("/api/moves", methods=["POST"])
 def api_moves():
     _ensure_cv_thread()
     try:
         payload = request.get_json(force=True, silent=False)
-        moves = parse_moves_payload(payload)
-        for m in moves:
-            instr_q.put_many([m])
-        return jsonify({"enqueued": len(moves)})
+        moves = parse_moves_payload(payload)  # list[MoveMM]
+        path = [{"dx": m.dx_mm, "dy": m.dy_mm, **({"speed": m.speed_mm_s} if m.speed_mm_s else {})}
+                for m in moves]
+        if hasattr(bt_link, "send_path"):
+            bt_link.send_path(path)
+        return jsonify({"forwarded": len(path)})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -213,13 +315,15 @@ def api_moves():
 def api_pen():
     data = request.get_json(force=True, silent=False) or {}
     down = bool(data.get("down", False))
-    instr_q.put_many([PenCmd(down=down)])
+    if hasattr(bt_link, "send_pen"):
+        bt_link.send_pen(down)
     return jsonify({"msg": f"pen {'down' if down else 'up'}"})
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
     try:
-        if hasattr(bt_link, "stop"): bt_link.stop()
+        if hasattr(bt_link, "stop"):
+            bt_link.stop()
         return jsonify({"msg": "stop sent"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -241,13 +345,32 @@ def health():
         }
     })
 
+@app.route("/metrics.json")
+def metrics():
+    st = cvp.get_state()
+    return jsonify({
+        "rate_hz": round(_rate_hz(), 1),
+        "median_latency_ms": round(_median_latency_ms(), 1),
+        "uptime_pct": round(_METRICS["uptime_pct"], 1),
+        "mm_per_px": st["mm_per_px"],
+        "reproj_err_px": st["board_reproj_err_px"],
+        "board_confidence": st["board_confidence"],
+        "bot_seen": bool(st["bot_pose"] is not None),
+        "platform": platform.platform(),
+    })
+
 # ---------- Graceful shutdown ----------
 def _shutdown(*_):
+    global _pose_thread_stop
+    _pose_thread_stop = True
     try:
-        coord.stop()
-    except Exception: pass
+        if hasattr(bt_link, "close"):
+            bt_link.close()
+    except Exception:
+        pass
     cam = get_cam()
-    if cam: cam.close()
+    if cam:
+        cam.close()
     os._exit(0)
 
 signal.signal(signal.SIGINT, _shutdown)
@@ -259,4 +382,5 @@ if __name__ == "__main__":
     except Exception:
         pass
     _ensure_cv_thread()
+    # gunicorn -w1 --threads 8 -b 0.0.0.0:5000 app.server:app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), threaded=True, debug=False)

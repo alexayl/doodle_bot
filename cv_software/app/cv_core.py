@@ -5,6 +5,7 @@ from typing import Optional, Tuple, Dict
 import numpy as np
 import cv2
 import math
+import time
 
 # ---------------- Tunables ----------------
 _POSE_ALPHA  = 0.25     # EMA for bot center/heading
@@ -12,7 +13,8 @@ _SCALE_ALPHA = 0.15     # EMA for mm/px
 
 _REPROJ_GOOD_PX   = 1.0     # accept if reprojection ≤ 1px regardless of cond(H)
 _COND_HARD_LIMIT  = 1e7     # only reject truly pathological homographies
-
+_CONF_MIN_BOARD = 0.60
+_CONF_MIN_BOT   = 0.60
 # ---------------- Board/Bot IDs ----------------
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS   = (10, 11)    # two markers along robot body axis
@@ -74,6 +76,7 @@ class _ArucoCompatDetector:
             corners, ids, _ = self._det.detectMarkers(gray)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._dict, parameters=self._params)
+        # print(f"Detected {0 if ids is None else len(ids)} markers")
         id_map: Dict[int, np.ndarray] = {}
         if ids is not None:
             for c, i in zip(corners, ids.flatten()):
@@ -123,11 +126,11 @@ class BoardCalibrator:
         frame_bgr = self._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         id_map = self.det.detect(gray)
-
+        # print(f"Detected markers: {list(id_map.keys())}")
         cs = self._collect_corners(id_map)
+        # print(f"Found corners: {list(cs.keys())}")
         if len(cs) < 3:
             return self.board_pose  # keep previous if we had one
-
         cs = self._complete_quad(cs)
         if not all(k in cs for k in ("TL", "TR", "BR", "BL")):
             return self.board_pose
@@ -135,6 +138,7 @@ class BoardCalibrator:
         img_pts = np.float32([cs["TL"], cs["TR"], cs["BR"], cs["BL"]])
         width_px  = float(np.linalg.norm(cs["TR"] - cs["TL"]))
         height_px = float(np.linalg.norm(cs["BL"] - cs["TL"]))
+        # print(f"Board pixel size: {width_px:.1f} x {height_px:.1f} px")
         width_px  = max(width_px, 1e-6)
         height_px = max(height_px, 1e-6)
         board_rect = np.float32([[0,0],[width_px,0],[width_px,height_px],[0,height_px]])
@@ -284,11 +288,29 @@ class CVPipeline:
                                         pixel_baseline=bot.pixel_baseline,
                                         confidence=max(self._pose_smooth.confidence, bot.confidence))
         return True
+    def process_frame(self, frame_bgr) -> tuple[bool, float]:
+        t0 = time.monotonic()
 
+        st = self.get_state()
+        if (not st["calibrated"]) or (st["mm_per_px"] is None) or \
+           (st["board_confidence"] is not None and st["board_confidence"] < _CONF_MIN_BOARD):
+            self.calibrate_board(frame_bgr)
+
+        valid = self.update_bot(frame_bgr)
+
+        st = self.get_state()
+        valid = bool(
+            st["calibrated"] and
+            st["mm_per_px"] is not None and
+            st["bot_pose"] is not None and
+            (st["board_confidence"] is None or st["board_confidence"] >= _CONF_MIN_BOARD) and
+            (st["bot_pose"]["confidence"]  >= _CONF_MIN_BOT)
+        )
+        return valid, (time.monotonic() - t0)
     def get_state(self):
         bp = self.cal.board_pose
         bot = self._pose_smooth or self._bot
-        return {
+        state = {
             "calibrated": bp is not None,
             "mm_per_px": None if bp is None else bp.mm_per_px,
             "board_size_px": None if bp is None else bp.board_size_px,
@@ -301,6 +323,8 @@ class CVPipeline:
                 "confidence": bot.confidence,
             },
         }
+        # print(state)
+        return state
 
     def corrected_delta_for_bt(self, desired_delta_board_mm, rotate_into_bot_frame=False):
         bp = self.cal.board_pose
@@ -313,3 +337,16 @@ class CVPipeline:
         if bot is None:
             return (dx, dy)
         return correct_delta_mm((dx, dy), bot.heading_rad)
+
+    def get_pose_mm(self):
+        """
+        Returns ((x_mm, y_mm), heading_rad, confidence) if available, else None.
+        """
+        st = self.get_state()
+        if not st["calibrated"] or st["bot_pose"] is None or st["mm_per_px"] is None:
+            return None
+        px = st["bot_pose"]["center_board_px"]
+        mpp = float(st["mm_per_px"])
+        heading = float(st["bot_pose"]["heading_rad"])
+        conf = float(st["bot_pose"]["confidence"])
+        return ((px[0] * mpp, px[1] * mpp), heading, conf)

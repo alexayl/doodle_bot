@@ -53,8 +53,8 @@ def apply_linux_controls(dev: str = "/dev/video0") -> None:
     if os.getenv("CAM_LOCK_PARAMS", "0") not in ("1", "true", "True"):
         return
     cmds = [
-        ["v4l2-ctl", "-d", dev, "--set-ctrl=exposure_auto=1"],                 # manual exposure
-        ["v4l2-ctl", "-d", dev, "--set-ctrl=exposure_absolute=70"],            # tune as needed
+        ["v4l2-ctl", "-d", dev, "--set-ctrl=exposure_auto=1"],
+        ["v4l2-ctl", "-d", dev, "--set-ctrl=exposure_absolute=80"],
         ["v4l2-ctl", "-d", dev, "--set-ctrl=gain=0"],
         ["v4l2-ctl", "-d", dev, "--set-ctrl=white_balance_automatic=0"],
         ["v4l2-ctl", "-d", dev, "--set-ctrl=white_balance_temperature=4500"],
@@ -70,7 +70,8 @@ def apply_linux_controls(dev: str = "/dev/video0") -> None:
 class ThreadedCamera:
     """
     Threaded capture with:
-      - MJPEG (if enabled) to reduce latency
+      - V4L2 (Linux) / AVFoundation (macOS) backend for low latency
+      - MJPEG (if enabled) to reduce encode time in camera
       - Single buffer (drop old frames)
       - ROI cropping (fractional)
       - Laplacian sharpness gating
@@ -78,33 +79,36 @@ class ThreadedCamera:
     """
     def __init__(self, cfg: Optional[CameraConfig] = None):
         self.cfg = cfg or CameraConfig()
+
         # Try to apply Linux UVC controls if requested
-        if isinstance(self.cfg.src, int):
-            apply_linux_controls(f"/dev/video{self.cfg.src}")
+        if platform.system().lower() == "linux":
+            devnum = self.cfg.src if isinstance(self.cfg.src, int) else 0
+            apply_linux_controls(f"/dev/video{devnum}")
         else:
             apply_linux_controls()
 
-        # Prefer AVFoundation on macOS to reduce latency
-        backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else 0
+        # Pick a low-latency backend
+        sys = platform.system().lower()
+        if sys == "linux":
+            backend = cv2.CAP_V4L2
+        elif hasattr(cv2, "CAP_AVFOUNDATION"):
+            backend = cv2.CAP_AVFOUNDATION
+        else:
+            backend = 0
+
         self.cap = cv2.VideoCapture(self.cfg.src, backend) if backend else cv2.VideoCapture(self.cfg.src)
 
-        # Request MJPEG if desired
+        # Request MJPEG and tight buffer *immediately* after open
         if self.cfg.use_mjpeg:
-            try:
-                self.cap.set(cv2.CAP_PROP_FOURCC, _fourcc("MJPG"))
-            except Exception:
-                pass
+            try: self.cap.set(cv2.CAP_PROP_FOURCC, _fourcc("MJPG"))
+            except Exception: pass
+        try: self.cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.buffer_size))
+        except Exception: pass
 
         # Basic capture props
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.cfg.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.height)
         self.cap.set(cv2.CAP_PROP_FPS,          self.cfg.fps)
-
-        # Minimize queueing
-        try:
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.buffer_size))
-        except Exception:
-            pass
 
         self.downscale = max(1, int(self.cfg.downscale))
         self._lock = threading.Lock()
@@ -121,7 +125,7 @@ class ThreadedCamera:
         while self.running:
             ok, frame = self.cap.read()
             if not ok:
-                time.sleep(0.01)
+                time.sleep(0.005)
                 continue
 
             # ROI crop first
@@ -153,9 +157,14 @@ class ThreadedCamera:
 
     def get_latest_good(self) -> Optional[np.ndarray]:
         with self._lock:
-            # Prefer last_good if it exists; otherwise latest
             src = self._last_good if self._last_good is not None else self._latest
             return None if src is None else src.copy()
+
+    def get_latest_with_ts(self) -> tuple[Optional[np.ndarray], float]:
+        with self._lock:
+            if self._latest is None:
+                return None, 0.0
+            return self._latest.copy(), float(self._latest_ts)
 
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
