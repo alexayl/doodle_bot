@@ -14,13 +14,16 @@ int main(void)
     printk("Buzzer Driver Test - 20ms Toggle\n");
     
     /* Initialize buzzer */
-    int ret = buzzer_init();
-    if (ret < 0) {
-        printk("ERROR: Buzzer initialization failed: %d\n", ret);
-        return ret;
+    buzzer_init();
+    
+    /* Check if buzzer is ready */
+    if (!buzzer_is_ready()) {
+        printk("ERROR: Buzzer driver not ready! Check devicetree configuration.\n");
+        printk("Expected: buzzer0 alias pointing to valid GPIO device\n");
+        return -1;
     }
     
-    printk("GPIO15 buzzer ready - starting 20ms toggle\n");
+    printk("Buzzer initialized successfully - starting toggle test\n");
     
     while (1) {
         /* Toggle buzzer state */

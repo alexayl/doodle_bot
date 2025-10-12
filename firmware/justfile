@@ -7,11 +7,11 @@ set shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 # ------------------
 SIM_BOARD        := "qemu_x86"
 
-ESP_BOARD        := "esp32_devkitc/esp32/procpu"
-ESP_PORT         := if os() == "windows" { "COM5" } else { "/dev/ttyUSB0" }          # adjust - check device for actual port
+ESP_BOARD        := "esp32s3_devkitc/esp32s3/procpu"
+ESP_PORT         := if os() == "windows" { "COM4" } else { "/dev/ttyUSB0" }          # Silicon Labs CP210x for ESP32
 
 NRF_BOARD       := "nrf52840dk/nrf52840"
-NRF_PORT        := if os() == "windows" { "COM7" } else { "/dev/ttyACM0" }
+NRF_PORT        := if os() == "windows" { "COM4" } else { "/dev/ttyACM0" }
 
 CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 
@@ -59,8 +59,7 @@ build-esp32: _verify_workspace clean
     -b "{{ESP_BOARD}}" \
     -d build \
     app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/app/boards/esp32_devkitc_wroom.overlay"
+    {{CMAKE_CACHE_ARGS}}
 
 flash-esp32:
   west flash --build-dir build
@@ -81,8 +80,7 @@ build-nrf: _verify_workspace clean
     -b "{{NRF_BOARD}}" \
     -d build \
     app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/app/boards/nrf52840dk_nrf52840.overlay"
+    {{CMAKE_CACHE_ARGS}}
 
 
 build-blinky:
@@ -107,13 +105,16 @@ monitor-nrf:
 run-nrf: build-nrf flash-nrf monitor-nrf
 
 # ------------------
-# Tests
-# -----------------
+# Tests - Cross Platform
+# ------------------
 test: clean
   west build -b native_sim tests/state_machine
   west build -t run
 
-test-servo: _verify_workspace clean
+# ------------------
+# Tests - NRF52840
+# ------------------
+test-nrf-servo: _verify_workspace clean
   west build \
     -p always \
     -b "{{NRF_BOARD}}" \
@@ -122,8 +123,9 @@ test-servo: _verify_workspace clean
     {{CMAKE_CACHE_ARGS}} \
     -DCONFIG_SERVO_TEST=y
   west flash --build-dir build
+  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
 
-test-led: _verify_workspace clean
+test-nrf-led: _verify_workspace clean
   west build \
     -p always \
     -b "{{NRF_BOARD}}" \
@@ -132,8 +134,9 @@ test-led: _verify_workspace clean
     {{CMAKE_CACHE_ARGS}} \
     -DCONFIG_LED_TEST=y
   west flash --build-dir build
+  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
 
-test-buzzer: _verify_workspace clean
+test-nrf-buzzer: _verify_workspace clean
   west build \
     -p always \
     -b "{{NRF_BOARD}}" \
@@ -142,6 +145,65 @@ test-buzzer: _verify_workspace clean
     {{CMAKE_CACHE_ARGS}} \
     -DCONFIG_BUZZER_TEST=y
   west flash --build-dir build
+  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+
+test-nrf-stepper: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_STEPPER_TEST=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+
+# ------------------
+# Tests - ESP32-S3
+# ------------------
+test-esp-servo: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{ESP_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_SERVO_TEST=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+
+test-esp-led: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{ESP_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_LED_TEST=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+
+test-esp-buzzer: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{ESP_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_BUZZER_TEST=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+
+test-esp-stepper: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{ESP_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_STEPPER_TEST=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
 
 
 # ------------------

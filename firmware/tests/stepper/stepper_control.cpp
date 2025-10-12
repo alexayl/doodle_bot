@@ -1,29 +1,51 @@
 /*
- * Simple stepper motor test - one revolution
+ * Single stepper motor test - basic movement patterns
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
 #include "stepper.h"
-
-LOG_MODULE_REGISTER(stepper_test, CONFIG_LOG_DEFAULT_LEVEL);
 
 int main(void)
 {
-    LOG_INF("Simple Stepper Test - One Revolution");
+    printk("Single Stepper Test - Left Motor Only\n");
 
-    // Initialize and enable steppers
-    stepper_init();
-    stepper_enable(STEPPER_BOTH);
+    // Initialize steppers
+    int ret = stepper_init();
+    if (ret != 0) {
+        printk("ERROR: Stepper initialization failed: %d\n", ret);
+        printk("Check devicetree: stepper_left node with valid GPIO configuration\n");
+        return -1;
+    }
+    
+    printk("Stepper motor initialized successfully\n");
+    
+    // Enable left stepper only
+    stepper_enable(STEPPER_LEFT);
 
+    int cycle = 0;
     while (1) {
-        LOG_INF("Starting one revolution at 360 deg/s (1 rev/s)");
-        stepper_set_velocity(STEPPER_BOTH, 360.0f);
-        k_sleep(K_SECONDS(1));  // Run for 1 second = 1 revolution
+        cycle++;
+        printk("\n=== Cycle %d ===\n", cycle);
+        
+        // Forward rotation - 1 revolution per second
+        printk("Forward: 360°/s (1 rev/s)\n");
+        stepper_set_velocity(STEPPER_LEFT, 360.0f);
+        k_sleep(K_SECONDS(2));  // 2 revolutions forward
 
-        LOG_INF("Stop");
-        stepper_set_velocity(STEPPER_BOTH, 0.0f);
-        k_sleep(K_SECONDS(2));  // Wait 2 seconds before next revolution
+        // Stop
+        printk("Stop\n");
+        stepper_set_velocity(STEPPER_LEFT, 0.0f);
+        k_sleep(K_SECONDS(1));
+
+        // Reverse rotation
+        printk("Reverse: -180°/s (0.5 rev/s)\n");
+        stepper_set_velocity(STEPPER_LEFT, -180.0f);
+        k_sleep(K_SECONDS(2));  // 1 revolution backward
+
+        // Stop and pause
+        printk("Stop - End of cycle\n");
+        stepper_set_velocity(STEPPER_LEFT, 0.0f);
+        k_sleep(K_SECONDS(2));
     }
 
     return 0;

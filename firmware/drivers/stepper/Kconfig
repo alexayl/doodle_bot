@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Doodle Bot Project
 # SPDX-License-Identifier: Apache-2.0
 
-config STEPPER
-	bool "Stepper Motor Driver"
+config DOODLE_STEPPER
+	bool "Doodle Bot Stepper Motor Driver"
 	depends on GPIO
 	help
 	  Enable stepper motor driver for A4988/DRV8825 modules.

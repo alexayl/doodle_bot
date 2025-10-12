@@ -47,11 +47,14 @@ int main(void)
     
     /* Check LED device is ready */
     if (!device_is_ready(LED_DEVICE)) {
-        printk("ERROR: LED device not ready\n");
+        printk("ERROR: LED device not ready!\n");
+        printk("Check devicetree: led1 node with valid GPIO configuration\n");
         return -1;
     }
     
-    printk("GPIO14 LED driver ready\n");
+    printk("LED device initialized successfully\n");
+    printk("GPIO11 LED driver ready\n");
+    printk("Testing both ACTIVE_HIGH and ACTIVE_LOW configurations...\n");
     
     /* Core firmware loop - sends ON/OFF commands to LED driver */
     led_command_t command = LED_OFF;
