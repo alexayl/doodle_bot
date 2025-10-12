@@ -284,8 +284,6 @@ FUNCTION buzzer_off():
 
 ## Testing
 
-## Testing
-
 Each driver includes comprehensive tests in the `../tests/` directory (relative to drivers/):
 
 ### Stepper Motor Tests (`../tests/stepper/stepper_control.cpp`)
@@ -354,14 +352,6 @@ Buzzer Driver Test - 20ms Toggle
 Buzzer initialized successfully - starting toggle test
 ```
 **Hardware Validation**: Should hear intermittent buzzer sound at 1Hz
-
-### State Machine Tests (`../tests/state_machine/test_state_machine.cpp`)
-**Purpose**: Tests robot state management and driver coordination
-**Note**: Advanced integration test combining multiple drivers
-
-### Navigation Tests (`../tests/navigation/nav.py`)
-**Purpose**: Python-based path planning and navigation algorithm testing
-**Note**: Host-side testing for navigation algorithms
 
 **Run tests with justfile commands**:
 ```bash
