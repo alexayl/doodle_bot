@@ -1,9 +1,11 @@
-# app/camera.py
 from __future__ import annotations
-import os, time, threading, platform, subprocess
+import os
+import time
+import threading
+import platform
+import subprocess
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Any
-
 import cv2
 import numpy as np
 
@@ -16,10 +18,7 @@ class CameraConfig:
     downscale: int = int(os.getenv("CAMERA_DOWNSCALE", "1"))
     use_mjpeg: bool = os.getenv("CAMERA_USE_MJPEG", "1") not in ("0", "false", "False")
     buffer_size: int = int(os.getenv("CAMERA_BUFFER_SIZE", "1"))
-    min_sharpness: Optional[float] = (
-        float(os.getenv("CAMERA_MIN_SHARPNESS", "0")) if os.getenv("CAMERA_MIN_SHARPNESS") else None
-    )
-    # ROI as fractions "x0,y0,x1,y1" in [0,1], e.g. "0.05,0.05,0.95,0.95"
+    min_sharpness: Optional[float] = float(os.getenv("CAMERA_MIN_SHARPNESS", "0")) if os.getenv("CAMERA_MIN_SHARPNESS") else None
     roi_frac: Optional[Tuple[float, float, float, float]] = None
 
     def __post_init__(self):
@@ -36,18 +35,18 @@ def _crop_roi(img: np.ndarray, frac_roi: Tuple[float, float, float, float] | Non
         return img
     h, w = img.shape[:2]
     x0, y0, x1, y1 = frac_roi
-    x0i, y0i = max(0, int(x0 * w)), max(0, int(y0 * h))
-    x1i, y1i = min(w, int(x1 * w)), min(h, int(y1 * h))
+    x0i = max(0, int(x0 * w))
+    y0i = max(0, int(y0 * h))
+    x1i = min(w, int(x1 * w))
+    y1i = min(h, int(y1 * h))
     if x1i <= x0i or y1i <= y0i:
         return img
     return img[y0i:y1i, x0i:x1i]
 
 def _sharpness_var_laplacian(gray: np.ndarray) -> float:
-    # Simple blur detector: variance of Laplacian (higher = sharper)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-def apply_linux_controls(dev: str = "/dev/video0") -> None:
-    """Optionally lock exposure/gain/WB/focus using v4l2-ctl on Linux."""
+def _apply_linux_controls(dev: str = "/dev/video0") -> None:
     if platform.system().lower() != "linux":
         return
     if os.getenv("CAM_LOCK_PARAMS", "0") not in ("1", "true", "True"):
@@ -68,58 +67,43 @@ def apply_linux_controls(dev: str = "/dev/video0") -> None:
             pass
 
 class ThreadedCamera:
-    """
-    Threaded capture with:
-      - V4L2 (Linux) / AVFoundation (macOS) backend for low latency
-      - MJPEG (if enabled) to reduce encode time in camera
-      - Single buffer (drop old frames)
-      - ROI cropping (fractional)
-      - Laplacian sharpness gating
-      - Monotonic timestamps
-    """
     def __init__(self, cfg: Optional[CameraConfig] = None):
         self.cfg = cfg or CameraConfig()
+        devnum = self.cfg.src if isinstance(self.cfg.src, int) else 0
+        _apply_linux_controls(f"/dev/video{devnum}")
 
-        # Try to apply Linux UVC controls if requested
-        if platform.system().lower() == "linux":
-            devnum = self.cfg.src if isinstance(self.cfg.src, int) else 0
-            apply_linux_controls(f"/dev/video{devnum}")
-        else:
-            apply_linux_controls()
-
-        # Pick a low-latency backend
         sys = platform.system().lower()
         if sys == "linux":
             backend = cv2.CAP_V4L2
-        elif hasattr(cv2, "CAP_AVFOUNDATION"):
-            backend = cv2.CAP_AVFOUNDATION
         else:
-            backend = 0
+            backend = getattr(cv2, "CAP_AVFOUNDATION", 0)
 
         self.cap = cv2.VideoCapture(self.cfg.src, backend) if backend else cv2.VideoCapture(self.cfg.src)
 
-        # Request MJPEG and tight buffer *immediately* after open
         if self.cfg.use_mjpeg:
-            try: self.cap.set(cv2.CAP_PROP_FOURCC, _fourcc("MJPG"))
-            except Exception: pass
-        try: self.cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.buffer_size))
-        except Exception: pass
-
-        # Basic capture props
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.cfg.width)
+            try:
+                self.cap.set(cv2.CAP_PROP_FOURCC, _fourcc("MJPG"))
+            except Exception:
+                pass
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.buffer_size))
+        except Exception:
+            pass
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.height)
-        self.cap.set(cv2.CAP_PROP_FPS,          self.cfg.fps)
+        self.cap.set(cv2.CAP_PROP_FPS, self.cfg.fps)
 
         self.downscale = max(1, int(self.cfg.downscale))
         self._lock = threading.Lock()
-        self._latest: Optional[np.ndarray] = None
-        self._latest_ts: float = 0.0
-        self._latest_sharpness: float = 0.0
-        self._last_good: Optional[np.ndarray] = None
-        self._last_good_ts: float = 0.0
+        self._latest = None
+        self._latest_ts = 0.0
+        self._latest_sharpness = 0.0
+        self._last_good = None
+        self._last_good_ts = 0.0
         self.running = True
-        self._thr = threading.Thread(target=self._loop, daemon=True)
-        self._thr.start()
+
+        t = threading.Thread(target=self._loop, daemon=True)
+        t.start()
 
     def _loop(self):
         while self.running:
@@ -128,10 +112,7 @@ class ThreadedCamera:
                 time.sleep(0.005)
                 continue
 
-            # ROI crop first
             frame = _crop_roi(frame, self.cfg.roi_frac)
-
-            # Downscale if requested
             if self.downscale > 1:
                 frame = cv2.resize(
                     frame,
@@ -141,8 +122,8 @@ class ThreadedCamera:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             sharp = _sharpness_var_laplacian(gray)
-
             ts = time.monotonic()
+
             with self._lock:
                 self._latest = frame
                 self._latest_ts = ts
@@ -151,20 +132,18 @@ class ThreadedCamera:
                     self._last_good = frame
                     self._last_good_ts = ts
 
-    def get_latest(self) -> Optional[np.ndarray]:
-        with self._lock:
-            return None if self._latest is None else self._latest.copy()
-
-    def get_latest_good(self) -> Optional[np.ndarray]:
-        with self._lock:
-            src = self._last_good if self._last_good is not None else self._latest
-            return None if src is None else src.copy()
-
-    def get_latest_with_ts(self) -> tuple[Optional[np.ndarray], float]:
+    def get_latest_with_ts(self):
         with self._lock:
             if self._latest is None:
                 return None, 0.0
             return self._latest.copy(), float(self._latest_ts)
+
+    def get_latest_good(self):
+        with self._lock:
+            src = self._last_good if self._last_good is not None else self._latest
+            if src is None:
+                return None
+            return src.copy()
 
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
@@ -178,10 +157,6 @@ class ThreadedCamera:
 
     def close(self):
         self.running = False
-        try:
-            self._thr.join(timeout=0.5)
-        except Exception:
-            pass
         try:
             self.cap.release()
         except Exception:

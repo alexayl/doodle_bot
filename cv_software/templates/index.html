@@ -5,62 +5,38 @@
   <title>DoodleBot CV</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    :root{
-      --bg:#0e1113; --panel:#121417; --txt:#e6e8eb; --muted:#9aa3ad; --brand:#4a90e2;
-      --bd:#22262b; --radius:12px;
-    }
+    :root{ --bg:#0e1113; --panel:#121417; --txt:#e6e8eb; --muted:#9aa3ad; --brand:#4a90e2; --bd:#22262b; --radius:12px; }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{
-      margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background:var(--bg); color:var(--txt);
-    }
-
-    /* Header (simple, no effects) */
+    body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--txt); }
     .hdr{border-bottom:1px solid var(--bd); background:#0f1215;}
-    .hdr-inner{
-      max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; gap:12px; align-items:center;
-    }
+    .hdr-inner{ max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; gap:12px; align-items:center; }
     .brand{font-weight:700; padding:6px 8px; border:1px solid var(--bd); border-radius:8px;}
     .nav{margin-left:auto; display:flex; gap:6px;}
-    a.tab{
-      text-decoration:none; color:var(--txt); font-weight:600; font-size:.95rem;
-      padding:8px 10px; border-radius:8px; border:1px solid var(--bd);
-    }
-    a.tab.active{background:var(--brand); border-color:var(--brand); color:#fff}
-
-    /* Main + panels */
-    .wrap{max-width:1080px; margin:20px auto; padding:0 16px 32px}
-    .panel{background:var(--panel); border:1px solid var(--bd); border-radius:var(--radius); overflow:hidden}
-    .panel-hd{padding:14px 16px; border-bottom:1px solid var(--bd); display:flex; gap:8px; align-items:baseline}
-    .title{font-size:1.1rem; font-weight:750}
-    .sub{color:var(--muted); font-size:.95rem}
-    .panel-bd{padding:16px}
-    .kicker{color:var(--muted); font-size:.85rem; text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px}
-
-    /* Stream */
-    .stream-wrap{border:1px solid var(--bd); border-radius:10px; overflow:hidden; background:#0c0f12}
-    .stream-aspect{display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#0c0f12}
-
-    /* Layout */
-    .grid{display:grid; gap:16px}
-    @media (min-width: 900px){ .grid-2{grid-template-columns:1.25fr .75fr} }
-
-    /* Forms + buttons */
-    form{margin:0}
-    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
-    .file{position:relative; overflow:hidden; border-radius:8px; border:1px dashed var(--bd); padding:8px 12px; color:var(--muted)}
-    .file input[type="file"]{position:absolute; inset:0; opacity:0; cursor:pointer}
-    .btn{
-      border:1px solid var(--bd); background:var(--brand); color:#fff; font-weight:700;
-      padding:9px 12px; border-radius:8px; cursor:pointer;
-    }
-    .btn.secondary{background:#1a1e22; color:var(--txt)}
-    .btn.ghost{background:transparent; color:var(--txt)}
-    .help{color:var(--muted); font-size:.92rem}
-    .alert{margin:8px 0; padding:10px 12px; border-radius:8px; border:1px solid #5a1f22; background:#1a1213; color:#f2c6c8}
-
-    .note{color:var(--muted); font-size:.9rem; margin-top:8px}
+    a.tab{ text-decoration:none; color:var(--txt); font-weight:600; font-size:.95rem; padding:8px 10px; border-radius:8px; border:1px solid var(--bd); }
+    a.tab.active{ background:var(--brand); border-color:var(--brand); color:#fff }
+    .wrap{ max-width:1080px; margin:20px auto; padding:0 16px 32px }
+    .panel{ background:var(--panel); border:1px solid var(--bd); border-radius:var(--radius); overflow:hidden }
+    .panel-hd{ padding:14px 16px; border-bottom:1px solid var(--bd); display:flex; gap:8px; align-items:baseline }
+    .title{ font-size:1.1rem; font-weight:750 }
+    .sub{ color:var(--muted); font-size:.95rem }
+    .panel-bd{ padding:16px }
+    .kicker{ color:var(--muted); font-size:.85rem; text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px }
+    .stream-wrap{ border:1px solid var(--bd); border-radius:10px; overflow:hidden; background:#0c0f12 }
+    .stream-aspect{ display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#0c0f12 }
+    .grid{ display:grid; gap:16px }
+    @media (min-width:900px){ .grid-2{ grid-template-columns:1.25fr .75fr } }
+    form{ margin:0 }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+    .btn{ border:1px solid var(--bd); background:var(--brand); color:#fff; font-weight:700; padding:9px 12px; border-radius:8px; cursor:pointer }
+    .btn.secondary{ background:#1a1e22; color:var(--txt) }
+    .btn.ghost{ background:transparent; color:var(--txt) }
+    .help{ color:var(--muted); font-size:.92rem }
+    .alert{ margin:8px 0; padding:10px 12px; border-radius:8px; border:1px solid #5a1f22; background:#1a1213; color:#f2c6c8 }
+    .note{ color:var(--muted); font-size:.9rem; margin-top:8px }
+    .file{ position:relative; overflow:hidden; border-radius:8px; border:1px dashed var(--bd); padding:8px 12px; color:var(--muted) }
+    .file input[type="file"]{ position:absolute; inset:0; opacity:0; cursor:pointer }
+    .file-label{ pointer-events:none }
   </style>
 </head>
 <body>
@@ -84,10 +60,10 @@
         </div>
         <div class="panel-bd">
           <div class="row" style="margin-bottom:6px">
-            <a class="btn" href="{{ url_for('erase') }}">Start Erase</a>
-            <a class="btn secondary" href="{{ url_for('draw') }}">Start Draw</a>
+            <a class="btn" href="{{ url_for('erase') }}">Open Erase</a>
+            <a class="btn secondary" href="{{ url_for('draw') }}">Open Draw</a>
           </div>
-          <p class="help">Draw uploads a target image, then the live stream starts. Erase starts the stream immediately.</p>
+          <p class="help">Erase generates a sweep path. Draw reads precomputed G-code path files.</p>
         </div>
       </section>
 
@@ -99,74 +75,75 @@
         </div>
         <div class="panel-bd grid grid-2">
           <div>
+            {% if msg %}<div class="alert" role="status">{{ msg }}</div>{% endif %}
+            {% if error %}<div class="alert" role="alert">⚠ {{ error }}</div>{% endif %}
             <div class="stream-wrap">
-              <img
-                id="stream"
-                class="stream-aspect"
-                src="{{ url_for('stream') }}?mode=erase"
-                alt="Live stream"
-                fetchpriority="high"
-                decoding="sync"
-                loading="eager"
-                referrerpolicy="no-referrer"
-              />
+              <img id="stream" class="stream-aspect" src="{{ url_for('stream') }}?mode=erase" alt="Live stream" fetchpriority="high" decoding="sync" loading="eager" referrerpolicy="no-referrer"/>
             </div>
             <div class="row" style="margin-top:8px">
+              <form action="{{ url_for('erase') }}" method="post">
+                <button type="submit" class="btn">Start Erase</button>
+              </form>
+              <form action="{{ url_for('erase') }}" method="post" onsubmit="return sendStop(event)">
+                <input type="hidden" name="action" value="stop"/>
+                <button type="submit" class="btn secondary">Stop</button>
+              </form>
               <button type="button" class="btn ghost" id="reloadBtn">Reload</button>
-              <button type="button" class="btn secondary" id="pauseBtn">Pause</button>
-              <button type="button" class="btn secondary" id="resumeBtn" disabled>Resume</button>
             </div>
-            <p class="note">Reload busts cache; Pause clears the stream source.</p>
+            <p class="note">Start builds a sweep inside board margins and starts the follower.</p>
           </div>
           <aside>
             <div class="kicker">Details</div>
-            <p class="help">Camera feed aligned to board reference. Consumed by CV for homography and pose.</p>
+            <p class="help">Keep fiducials visible. Overlay shows calibration and loop rate.</p>
           </aside>
         </div>
       </section>
 
-    {% elif page == 'draw' %}
+      {% elif page == 'draw' %}
       <section class="panel">
         <div class="panel-hd">
           <div class="title">Draw Mode</div>
-          <div class="sub">Upload target, then stream</div>
+          <div class="sub">Upload an image → server traces → fits to board → starts run</div>
         </div>
         <div class="panel-bd grid grid-2">
           <div>
-            {% if error %}
-              <div class="alert" role="alert">⚠ {{ error }}</div>
+            {% if msg %}<div class="alert" role="status">{{ msg }}</div>{% endif %}
+            {% if error %}<div class="alert" role="alert">⚠ {{ error }}</div>{% endif %}
+    
+            <div class="kicker">Target Image</div>
+            <form action="{{ url_for('draw') }}" method="post" enctype="multipart/form-data" class="row" style="margin-bottom:10px">
+              <label class="file">
+                <span class="file-label">{{ target or 'Choose image…' }}</span>
+                <input type="file" name="file" accept="image/*" aria-label="Choose target image" onchange="syncFileLabel(event)"/>
+              </label>
+              <button type="submit" class="btn">Upload & Start</button>
+            </form>
+    
+            {% if has_target %}
+              <p class="help" style="margin-top:-4px">Loaded: <strong>{{ target }}</strong></p>
             {% endif %}
-
-            {% if not has_target %}
-              <div class="kicker">Target</div>
-              <form action="{{ url_for('draw') }}" method="post" enctype="multipart/form-data" class="row" style="margin-bottom:12px">
-                <label class="file">
-                  <input type="file" name="file" accept="image/*" required aria-label="Choose target image">
-                  Choose image…
-                </label>
-                <button type="submit" class="btn">Upload & Start</button>
+    
+            <div class="stream-wrap" style="margin-top:8px">
+              <img id="stream" class="stream-aspect" src="{{ url_for('stream') }}" alt="Live stream"/>
+            </div>
+    
+            <div class="row" style="margin-top:8px">
+              <form action="{{ url_for('draw') }}" method="post" onsubmit="return sendStop(event)">
+                <input type="hidden" name="action" value="stop"/>
+                <button type="submit" class="btn secondary">Stop</button>
               </form>
-              <p class="help">Common image formats supported.</p>
-            {% else %}
-              <div class="kicker">Target</div>
-              <p class="help" style="margin-top:4px">Loaded: <strong>{{ target }}</strong></p>
-              <div class="stream-wrap" style="margin-top:8px">
-                <img id="stream" class="stream-aspect" src="{{ url_for('stream') }}" alt="Live stream"/>
-              </div>
-              <div class="row" style="margin-top:8px">
-                <button type="button" class="btn ghost" id="reloadBtn">Reload</button>
-                <button type="button" class="btn secondary" id="pauseBtn">Pause</button>
-                <button type="button" class="btn secondary" id="resumeBtn" disabled>Resume</button>
-              </div>
-            {% endif %}
+              <button type="button" class="btn ghost" id="reloadBtn">Reload</button>
+            </div>
+    
+            <p class="note">The server traces contours (Otsu → contours → subsample), converts to incremental G-code, fits to the board, and starts the follower.</p>
           </div>
-
+    
           <aside>
             <div class="kicker">Tips</div>
             <ul class="help" style="margin:6px 0 0; padding-left:18px; line-height:1.5">
-              <li>Ensure corners and fiducials are visible.</li>
-              <li>Minimize glare.</li>
-              <li>Keep camera fixed during alignment.</li>
+              <li>High-contrast images trace best.</li>
+              <li>Wait for calibration to show mm/px and low reprojection error.</li>
+              <li>Use Stop to interrupt a run.</li>
             </ul>
           </aside>
         </div>
@@ -175,33 +152,26 @@
   </main>
 
   <script>
-    // Minimal controls: no polling, no listeners
     (function(){
       const img = document.getElementById('stream');
       const reloadBtn = document.getElementById('reloadBtn');
-      const pauseBtn = document.getElementById('pauseBtn');
-      const resumeBtn = document.getElementById('resumeBtn');
       if(!img) return;
-
       function bust(){
         const u = new URL(img.src, location.href);
         u.searchParams.set('_', Date.now().toString());
         img.src = u.toString();
       }
-
-      reloadBtn && reloadBtn.addEventListener('click', bust);
-      pauseBtn && pauseBtn.addEventListener('click', () => {
-        img.dataset.prev = img.src;
-        img.src = 'about:blank';
-        pauseBtn.disabled = true;
-        if(resumeBtn) resumeBtn.disabled = false;
-      });
-      resumeBtn && resumeBtn.addEventListener('click', () => {
-        if(img.dataset.prev){ img.src = img.dataset.prev; }
-        resumeBtn.disabled = true;
-        if(pauseBtn) pauseBtn.disabled = false;
-      });
+      if(reloadBtn) reloadBtn.addEventListener('click', bust);
     })();
+
+    function sendStop(ev){
+      ev.preventDefault();
+      const form = ev.target;
+      fetch(form.action, { method: "POST", body: new FormData(form) })
+        .then(() => {})
+        .catch(() => {});
+      return false;
+    }
   </script>
 </body>
 </html>

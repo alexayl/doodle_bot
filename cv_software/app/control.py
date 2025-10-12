@@ -1,59 +1,99 @@
-# app/control.py (pass-through, no closed-loop on the Pi)
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Tuple, Dict
+import math
 
 @dataclass(frozen=True)
-class MoveMM:
-    dx_mm: float
-    dy_mm: float
-    speed_mm_s: Optional[float] = None
+class Waypoint:
+    x_mm: float
+    y_mm: float
 
-@dataclass(frozen=True)
-class PenCmd:
-    down: bool
+@dataclass
+class FollowerParams:
+    pos_eps_mm: float = 2.0
+    max_step_mm: float = 25.0
+    tick_s: float = 0.08
 
-Instruction = Union[MoveMM, PenCmd]
+class PathFollower:
+    def __init__(self, params: Optional[FollowerParams] = None):
+        self.p = params or FollowerParams()
+        self._wps: List[Waypoint] = []
+        self._i = 0
+        self.active = False
 
-def parse_moves_payload(payload: Dict[str, Any]) -> List[Instruction]:
-    """
-    Accepts:
-      { "frame":"board", "moves":[{"dx":..,"dy":..,"speed":..}, ...] }
-      { "frame":"board", "waypoints":[[x,y], [x,y], ...] }  # absolute points (mm)
-      [[dx,dy], ...] or [{"dx":..,"dy":..}, ...]
-    Returns: list[MoveMM]
-    """
-    # list input variants
-    if isinstance(payload, list):
-        out: List[Instruction] = []
-        for item in payload:
-            if isinstance(item, dict):
-                out.append(MoveMM(float(item["dx"]), float(item["dy"]),
-                                  float(item["speed"]) if "speed" in item else None))
+    def load_waypoints(self, wps: List[Waypoint]) -> None:
+        self._wps = wps or []
+        self._i = 0
+
+    def start(self) -> None:
+        self.active = bool(self._wps)
+        self._i = 0
+
+    def stop(self) -> None:
+        self.active = False
+
+    def index(self) -> int:
+        return self._i
+
+    def total(self) -> int:
+        return len(self._wps)
+
+    @staticmethod
+    def _to_robot_frame(dx_board: float, dy_board: float, heading_rad: float) -> Tuple[float, float]:
+        c = math.cos(-heading_rad)
+        s = math.sin(-heading_rad)
+        fwd = c * dx_board - s * dy_board
+        lef = s * dx_board + c * dy_board
+        return float(fwd), float(-lef)
+
+    def step(self, pose: Optional[Tuple[Tuple[float, float], float, float]]) -> Optional[Tuple[float, float]]:
+        if not self.active or not self._wps or pose is None:
+            return None
+
+        (x, y), heading, _ = pose
+
+        while self._i < len(self._wps):
+            tgt = self._wps[self._i]
+            if math.hypot(tgt.x_mm - x, tgt.y_mm - y) <= self.p.pos_eps_mm:
+                self._i += 1
             else:
-                dx, dy = item
-                out.append(MoveMM(float(dx), float(dy)))
-        return out
+                break
 
-    frame = str(payload.get("frame", "board")).lower()
-    if frame != "board":
-        raise ValueError("Unsupported frame; expected 'board'")
+        if self._i >= len(self._wps):
+            self.stop()
+            return None
 
-    out: List[Instruction] = []
-    if "moves" in payload:
-        for m in payload["moves"]:
-            out.append(MoveMM(
-                dx_mm=float(m["dx"]),
-                dy_mm=float(m["dy"]),
-                speed_mm_s=float(m["speed"]) if "speed" in m else None,
-            ))
-        return out
+        tgt = self._wps[self._i]
+        ex = tgt.x_mm - x
+        ey = tgt.y_mm - y
+        dist = math.hypot(ex, ey)
+        if dist <= self.p.pos_eps_mm:
+            self._i += 1
+            return None
 
-    if "waypoints" in payload:
-        wps: List[List[float]] = payload["waypoints"]
-        # Convert absolute waypoints to relative legs for firmware
-        for (x0, y0), (x1, y1) in zip(wps[:-1], wps[1:]):
-            out.append(MoveMM(dx_mm=float(x1 - x0), dy_mm=float(y1 - y0)))
-        return out
+        step_len = min(self.p.max_step_mm, dist)
+        ux = ex / dist
+        uy = ey / dist
+        return self._to_robot_frame(ux * step_len, uy * step_len, heading)
 
-    raise ValueError("Payload must include 'moves' or 'waypoints'")
+class PathRun:
+    def __init__(self):
+        self.wps: List[Waypoint] = []
+        self.follower = PathFollower(FollowerParams())
+        self.active = False
+
+    def load(self, wps: List[Waypoint]) -> None:
+        self.wps = wps or []
+        self.follower.load_waypoints(self.wps)
+
+    def start(self) -> None:
+        if self.wps:
+            self.active = True
+            self.follower.start()
+
+    def stop(self) -> None:
+        self.active = False
+        self.follower.stop()
+
+    def status(self) -> Dict[str, int | bool]:
+        return {"active": self.active, "idx": self.follower.index(), "total": self.follower.total()}

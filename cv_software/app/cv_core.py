@@ -1,30 +1,25 @@
-# app/cv_core.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 import numpy as np
 import cv2
 import math
 import time
 
-# ---------------- Tunables ----------------
-_POSE_ALPHA  = 0.25     # EMA for bot center/heading
-_SCALE_ALPHA = 0.15     # EMA for mm/px
-
-_REPROJ_GOOD_PX   = 1.0     # accept if reprojection ≤ 1px regardless of cond(H)
-_COND_HARD_LIMIT  = 1e7     # only reject truly pathological homographies
+_POSE_ALPHA = 0.25
+_SCALE_ALPHA = 0.15
+_REPROJ_GOOD_PX = 1.0
+_COND_HARD_LIMIT = 1e7
 _CONF_MIN_BOARD = 0.60
-_CONF_MIN_BOT   = 0.60
-# ---------------- Board/Bot IDs ----------------
-BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
-BOT_MARKERS   = (10, 11)    # two markers along robot body axis
+_CONF_MIN_BOT = 0.60
 
-# ---------------- Physical refs ----------------
+BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
+BOT_MARKERS = (10, 11)
+
 BOT_BASELINE_MM = 60.0
-KNOWN_BOARD_WIDTH_MM  = 1000.0
+KNOWN_BOARD_WIDTH_MM = 1000.0
 KNOWN_BOARD_HEIGHT_MM = 1460.0
 
-# ---------------- Data classes ----------------
 @dataclass
 class CameraModel:
     K: Optional[np.ndarray] = None
@@ -45,7 +40,6 @@ class BotPose:
     pixel_baseline: float
     confidence: float = 0.0
 
-# ---------------- ArUco compat ----------------
 def _aruco_dict():
     return cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
@@ -61,10 +55,6 @@ def _aruco_params():
     return p
 
 class _ArucoCompatDetector:
-    """
-    detect(gray) -> Dict[int, (4,2) float32 corners]
-    (id_map only — corners/ids arrays are not returned)
-    """
     def __init__(self):
         self._dict = _aruco_dict()
         self._params = _aruco_params()
@@ -76,14 +66,12 @@ class _ArucoCompatDetector:
             corners, ids, _ = self._det.detectMarkers(gray)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._dict, parameters=self._params)
-        # print(f"Detected {0 if ids is None else len(ids)} markers")
         id_map: Dict[int, np.ndarray] = {}
         if ids is not None:
             for c, i in zip(corners, ids.flatten()):
-                id_map[int(i)] = c.reshape(-1, 2).astype(np.float32)  # (4,2)
+                id_map[int(i)] = c.reshape(-1, 2).astype(np.float32)
         return id_map
 
-# ---------------- Board calibration ----------------
 class BoardCalibrator:
     def __init__(self, cam: Optional[CameraModel] = None):
         self.det = _ArucoCompatDetector()
@@ -101,12 +89,14 @@ class BoardCalibrator:
         have: Dict[str, np.ndarray] = {}
         for name, mid in BOARD_CORNERS.items():
             if mid in id_map:
-                have[name] = id_map[mid].mean(axis=0)  # (4,2)->(2,)
+                have[name] = id_map[mid].mean(axis=0)
         return have
 
     def _complete_quad(self, cs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        out = dict(cs); have = set(cs.keys())
-        if len(have) < 3: return out
+        out = dict(cs)
+        have = set(cs.keys())
+        if len(have) < 3:
+            return out
         if have >= {"TL", "TR", "BL"} and "BR" not in have:
             out["BR"] = cs["TR"] + (cs["BL"] - cs["TL"])
         elif have >= {"TL", "BL", "BR"} and "TR" not in have:
@@ -126,52 +116,49 @@ class BoardCalibrator:
         frame_bgr = self._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         id_map = self.det.detect(gray)
-        # print(f"Detected markers: {list(id_map.keys())}")
         cs = self._collect_corners(id_map)
-        # print(f"Found corners: {list(cs.keys())}")
         if len(cs) < 3:
-            return self.board_pose  # keep previous if we had one
+            return self.board_pose
         cs = self._complete_quad(cs)
         if not all(k in cs for k in ("TL", "TR", "BR", "BL")):
             return self.board_pose
 
         img_pts = np.float32([cs["TL"], cs["TR"], cs["BR"], cs["BL"]])
-        width_px  = float(np.linalg.norm(cs["TR"] - cs["TL"]))
+        width_px = float(np.linalg.norm(cs["TR"] - cs["TL"]))
         height_px = float(np.linalg.norm(cs["BL"] - cs["TL"]))
-        # print(f"Board pixel size: {width_px:.1f} x {height_px:.1f} px")
-        width_px  = max(width_px, 1e-6)
+        width_px = max(width_px, 1e-6)
         height_px = max(height_px, 1e-6)
-        board_rect = np.float32([[0,0],[width_px,0],[width_px,height_px],[0,height_px]])
+        board_rect = np.float32([[0, 0], [width_px, 0], [width_px, height_px], [0, height_px]])
 
-        H = cv2.getPerspectiveTransform(img_pts.astype(np.float32),
-                                        board_rect.astype(np.float32))
-        if H is None or abs(H[2,2]) < 1e-12:
+        H = cv2.getPerspectiveTransform(img_pts.astype(np.float32), board_rect.astype(np.float32))
+        if H is None or abs(H[2, 2]) < 1e-12:
             return self.board_pose
-        H = H / H[2,2]
+        H = H / H[2, 2]
 
         condH = float(np.linalg.cond(H))
         reproj = self._reproj_error(H, img_pts, board_rect)
         if reproj > _REPROJ_GOOD_PX and condH > _COND_HARD_LIMIT:
-            return self.board_pose  # reject truly bad H
+            return self.board_pose
 
         bp = BoardPose(
             H_img2board=H,
             board_size_px=(int(width_px), int(height_px)),
             mm_per_px=getattr(self.board_pose, "mm_per_px", None),
             reproj_err_px=reproj,
-            confidence=float(np.clip((6.0 - reproj)/6.0, 0.0, 1.0)),
+            confidence=float(np.clip((6.0 - reproj) / 6.0, 0.0, 1.0)),
         )
         self.board_pose = bp
         return self.board_pose
 
-# ---------------- Bot tracker ----------------
 class BotTracker:
     def __init__(self, cal: BoardCalibrator):
         self.det = _ArucoCompatDetector()
         self.cal = cal
 
     @staticmethod
-    def _center(c4): return c4.mean(axis=0)
+    def _center(c4):
+        return c4.mean(axis=0)
+
     @staticmethod
     def _warp(H, pts_xy):
         return cv2.perspectiveTransform(pts_xy[None, :, :].astype(np.float32), H)[0]
@@ -192,15 +179,16 @@ class BotTracker:
         v = pair_board[1] - pair_board[0]
         center = 0.5 * (pair_board[0] + pair_board[1])
         heading = float(np.arctan2(v[1], v[0]))
-        heading = float(np.arctan2(np.sin(heading), np.cos(heading)))  # wrap [-pi, pi]
+        heading = float(np.arctan2(np.sin(heading), np.cos(heading)))
         pix_base = float(np.linalg.norm(v))
         conf = float(np.clip((pix_base / 40.0), 0.0, 1.0))
-        return BotPose(center_board_px=(center[0], center[1]),
-                       heading_rad=heading,
-                       pixel_baseline=pix_base,
-                       confidence=conf)
+        return BotPose(
+            center_board_px=(center[0], center[1]),
+            heading_rad=heading,
+            pixel_baseline=pix_base,
+            confidence=conf,
+        )
 
-# ---------------- Scale estimator ----------------
 class ScaleEstimator:
     def __init__(self, cal: BoardCalibrator):
         self.cal = cal
@@ -210,7 +198,7 @@ class ScaleEstimator:
         if bp is None:
             return None
         Wpx, Hpx = bp.board_size_px
-        sx = KNOWN_BOARD_WIDTH_MM  / float(Wpx)
+        sx = KNOWN_BOARD_WIDTH_MM / float(Wpx)
         sy = KNOWN_BOARD_HEIGHT_MM / float(Hpx)
         mm_per_px = 0.5 * (sx + sy)
         self.cal.board_pose.mm_per_px = mm_per_px
@@ -224,24 +212,15 @@ class ScaleEstimator:
             self.cal.board_pose.mm_per_px = mm_per_px
         return mm_per_px
 
-# ---------------- Helpers ----------------
-def board_pixels_to_mm(xy_board_px: np.ndarray, mm_per_px: float) -> np.ndarray:
-    return xy_board_px.astype(np.float32) * float(mm_per_px)
-
-def warp_points_board2img(H_img2board: np.ndarray, pts_xy_board: np.ndarray) -> np.ndarray:
-    """Map points from board plane back to image pixels."""
-    H = np.linalg.inv(H_img2board)
-    return cv2.perspectiveTransform(pts_xy_board[None].astype(np.float32), H)[0]
-
 def correct_delta_mm(desired_delta_mm, bot_heading_rad):
     dx, dy = desired_delta_mm
-    c, s = np.cos(-bot_heading_rad), np.sin(-bot_heading_rad)
-    fwd =  c*dx - s*dy
-    lef =  s*dx + c*dy
-    lef = -lef  # board y-down to left+
+    c = np.cos(-bot_heading_rad)
+    s = np.sin(-bot_heading_rad)
+    fwd = c * dx - s * dy
+    lef = s * dx + c * dy
+    lef = -lef
     return float(fwd), float(lef)
 
-# ---------------- Facade ----------------
 class CVPipeline:
     def __init__(self, cam: Optional[CameraModel] = None):
         self.cal = BoardCalibrator(cam)
@@ -253,7 +232,9 @@ class CVPipeline:
 
     @staticmethod
     def _ema(old, new, a):
-        return new if old is None else (a*old + (1.0-a)*new)
+        if old is None:
+            return new
+        return a * old + (1.0 - a) * new
 
     def calibrate_board(self, frame_bgr) -> bool:
         return self.cal.calibrate(frame_bgr) is not None
@@ -264,15 +245,12 @@ class CVPipeline:
             return False
         self._bot = bot
 
-        # mm/px from board size or bot baseline
         if self.cal.board_pose and self.cal.board_pose.mm_per_px is None:
             if self.scale.from_board_size() is None:
                 self.scale.from_bot_baseline(bot)
 
         if self.cal.board_pose and self.cal.board_pose.mm_per_px is not None:
-            self._mm_per_px_smooth = self._ema(self._mm_per_px_smooth,
-                                               float(self.cal.board_pose.mm_per_px),
-                                               _SCALE_ALPHA)
+            self._mm_per_px_smooth = self._ema(self._mm_per_px_smooth, float(self.cal.board_pose.mm_per_px), _SCALE_ALPHA)
             self.cal.board_pose.mm_per_px = self._mm_per_px_smooth
 
         if self._pose_smooth is None:
@@ -280,33 +258,33 @@ class CVPipeline:
         else:
             cx = self._ema(self._pose_smooth.center_board_px[0], bot.center_board_px[0], _POSE_ALPHA)
             cy = self._ema(self._pose_smooth.center_board_px[1], bot.center_board_px[1], _POSE_ALPHA)
-            dh = math.atan2(math.sin(bot.heading_rad - self._pose_smooth.heading_rad),
-                            math.cos(bot.heading_rad - self._pose_smooth.heading_rad))
+            dh = math.atan2(math.sin(bot.heading_rad - self._pose_smooth.heading_rad), math.cos(bot.heading_rad - self._pose_smooth.heading_rad))
             hd = self._pose_smooth.heading_rad + (1.0 - _POSE_ALPHA) * dh
-            self._pose_smooth = BotPose(center_board_px=(cx, cy),
-                                        heading_rad=float(math.atan2(math.sin(hd), math.cos(hd))),
-                                        pixel_baseline=bot.pixel_baseline,
-                                        confidence=max(self._pose_smooth.confidence, bot.confidence))
+            self._pose_smooth = BotPose(
+                center_board_px=(cx, cy),
+                heading_rad=float(math.atan2(math.sin(hd), math.cos(hd))),
+                pixel_baseline=bot.pixel_baseline,
+                confidence=max(self._pose_smooth.confidence, bot.confidence),
+            )
         return True
+
     def process_frame(self, frame_bgr) -> tuple[bool, float]:
         t0 = time.monotonic()
-
         st = self.get_state()
-        if (not st["calibrated"]) or (st["mm_per_px"] is None) or \
-           (st["board_confidence"] is not None and st["board_confidence"] < _CONF_MIN_BOARD):
+        needs_cal = not st["calibrated"] or st["mm_per_px"] is None
+        if needs_cal or (st["board_confidence"] is not None and st["board_confidence"] < _CONF_MIN_BOARD):
             self.calibrate_board(frame_bgr)
-
-        valid = self.update_bot(frame_bgr)
-
+        valid_now = self.update_bot(frame_bgr)
         st = self.get_state()
         valid = bool(
-            st["calibrated"] and
-            st["mm_per_px"] is not None and
-            st["bot_pose"] is not None and
-            (st["board_confidence"] is None or st["board_confidence"] >= _CONF_MIN_BOARD) and
-            (st["bot_pose"]["confidence"]  >= _CONF_MIN_BOT)
+            st["calibrated"]
+            and st["mm_per_px"] is not None
+            and st["bot_pose"] is not None
+            and (st["board_confidence"] is None or st["board_confidence"] >= _CONF_MIN_BOARD)
+            and st["bot_pose"]["confidence"] >= _CONF_MIN_BOT
         )
-        return valid, (time.monotonic() - t0)
+        return valid, time.monotonic() - t0
+
     def get_state(self):
         bp = self.cal.board_pose
         bot = self._pose_smooth or self._bot
@@ -323,25 +301,58 @@ class CVPipeline:
                 "confidence": bot.confidence,
             },
         }
-        # print(state)
         return state
+
+    def board_size_mm(self) -> Optional[Tuple[float, float]]:
+        st = self.get_state()
+        if not st["calibrated"] or st["mm_per_px"] is None or st["board_size_px"] is None:
+            return None
+        mpp = float(st["mm_per_px"])
+        Wpx, Hpx = st["board_size_px"]
+        return mpp * float(Wpx), mpp * float(Hpx)
+
+    def fit_path_to_board(self, wps: List["Waypoint"], margin_frac: float = 0.10) -> List["Waypoint"]:
+        sz = self.board_size_mm()
+        if not sz or not wps:
+            return []
+        Wmm, Hmm = sz
+        xs = [w.x_mm for w in wps]
+        ys = [w.y_mm for w in wps]
+        minx = min(xs)
+        maxx = max(xs)
+        miny = min(ys)
+        maxy = max(ys)
+        w = (maxx - minx) or 1.0
+        h = (maxy - miny) or 1.0
+        sx = (1.0 - 2 * margin_frac) * Wmm / w
+        sy = (1.0 - 2 * margin_frac) * Hmm / h
+        s = min(sx, sy)
+        cx_src = 0.5 * (minx + maxx)
+        cy_src = 0.5 * (miny + maxy)
+        cx_dst = 0.5 * Wmm
+        cy_dst = 0.5 * Hmm
+        from app.control import Waypoint
+        out = []
+        for wp in wps:
+            x = (wp.x_mm - cx_src) * s + cx_dst
+            y = (wp.y_mm - cy_src) * s + cy_dst
+            out.append(Waypoint(x, y))
+        return out
 
     def corrected_delta_for_bt(self, desired_delta_board_mm, rotate_into_bot_frame=False):
         bp = self.cal.board_pose
         if bp is None or bp.mm_per_px is None:
             return None
-        dx, dy = float(desired_delta_board_mm[0]), float(desired_delta_board_mm[1])
+        dx = float(desired_delta_board_mm[0])
+        dy = float(desired_delta_board_mm[1])
         if not rotate_into_bot_frame:
-            return (dx, dy)
-        bot = (self._pose_smooth or self._bot)
+            return dx, dy
+        bot = self._pose_smooth or self._bot
         if bot is None:
-            return (dx, dy)
+            return dx, dy
         return correct_delta_mm((dx, dy), bot.heading_rad)
 
     def get_pose_mm(self):
-        """
-        Returns ((x_mm, y_mm), heading_rad, confidence) if available, else None.
-        """
         st = self.get_state()
         if not st["calibrated"] or st["bot_pose"] is None or st["mm_per_px"] is None:
             return None
@@ -349,4 +360,4 @@ class CVPipeline:
         mpp = float(st["mm_per_px"])
         heading = float(st["bot_pose"]["heading_rad"])
         conf = float(st["bot_pose"]["confidence"])
-        return ((px[0] * mpp, px[1] * mpp), heading, conf)
+        return (px[0] * mpp, px[1] * mpp), heading, conf
