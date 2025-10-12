@@ -1,5 +1,9 @@
 
 cmake_minimum_required(VERSION 3.20.0)
+
+# Add devicetree bindings directory
+list(APPEND DTS_ROOT ${CMAKE_SOURCE_DIR}/..)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(doodle_bot)
 
@@ -19,6 +23,7 @@ elseif(CONFIG_BUZZER_TEST)
 elseif(CONFIG_SERVO_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
     )
 elseif(CONFIG_SERVO_PWM_TEST)
     target_sources(app PRIVATE
@@ -35,6 +40,9 @@ else()
 endif()
 
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)
+
+# Add DT bindings for custom drivers
+list(APPEND DTS_ROOT ${CMAKE_SOURCE_DIR}/..)
 
 # Add custom servo driver directly to the application
 if(CONFIG_SERVO)

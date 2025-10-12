@@ -1,8 +1,13 @@
 / {
-    /* Servo motor for eraser control - GPIO18 PWM */
+    aliases {
+        servo0 = &servo;
+    };
+
+    /* Servo motor for eraser control - GPIO2 PWM */
     servo: servo {
-        compatible = "doodle-servo";
-        pwms = <&ledc0 0 20000000 0>; /* 20ms period, channel 0, normal polarity - GPIO18 */
+        status = "okay";
+        compatible = "doodle_servo";
+        pwms = <&ledc0 0 20000000 0>; /* 20ms period, channel 0, normal polarity - GPIO2 */
         label = "SERVO_ERASER";
     };
 

@@ -24,6 +24,10 @@ include:
   - name: stepper-controller.yaml
 
 properties:
+  label:
+    type: string
+    description: Human readable string describing the device.
+
   step-gpios:
     required: true
     type: phandle-array
