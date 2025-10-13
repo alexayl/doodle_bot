@@ -42,6 +42,20 @@ config BUZZER_TEST
 	  When enabled, builds the buzzer test application instead of the main
 	  doodle bot application. This allows testing the buzzer driver in isolation.
 
+config PWM_BUZZER_TEST
+	bool "Build PWM buzzer volume control test"
+	select PWM
+	help
+	  When enabled, builds the PWM buzzer test application for volume control.
+	  This test demonstrates how to control passive buzzer volume using PWM duty cycle.
+
+config PWM_BUZZER_DRIVER_TEST
+	bool "Build PWM buzzer driver test"
+	select PWM
+	help
+	  When enabled, builds the PWM buzzer driver test application.
+	  This test demonstrates the full PWM buzzer driver with volume and frequency control.
+
 config STEPPER_TEST
 	bool "Build stepper test instead of main application"
 	select DOODLE_STEPPER

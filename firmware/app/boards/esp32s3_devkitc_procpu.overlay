@@ -58,6 +58,13 @@
         label = "BUZZER";
     };
 
+    /* PWM Buzzer with volume control - separate from GPIO buzzer */
+    pwm_buzzer: pwm_buzzer {
+        compatible = "pwm-buzzer";
+        pwms = <&ledc0 2 2500000 0>; /* GPIO12 - 400Hz, Channel 2, normal polarity */
+        label = "PWM_BUZZER";
+    };
+
     aliases {
         stepper-left = &stepper_left;
         stepper-right = &stepper_right;
@@ -67,6 +74,7 @@
         servo1 = &servo_marker;
         led0 = &led1;
         buzzer0 = &buzzer;
+        pwm-buzzer0 = &pwm_buzzer;
     };
 };
 
@@ -87,13 +95,19 @@
         reg = <0x1>;
         timer = <0>;
     };
+
+    channel2@2 {
+        reg = <0x2>;
+        timer = <0>;
+    };
 };
 
 &pinctrl {
     ledc0_default: ledc0_default {
         group1 {
             pinmux = <LEDC_CH0_GPIO2>,   /* GPIO2 - Servo PWM on Channel 0 */
-                     <LEDC_CH1_GPIO3>;   /* GPIO3 - Servo PWM on Channel 1 */
+                     <LEDC_CH1_GPIO3>,   /* GPIO3 - Servo PWM on Channel 1 */
+                     <LEDC_CH2_GPIO12>;  /* GPIO12 - Buzzer PWM on Channel 2 */
             output-enable;
         };
     };
