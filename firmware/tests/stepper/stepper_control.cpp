@@ -30,7 +30,7 @@ int main(void)
         // Forward rotation - 1 revolution per second
         printk("Forward: 360°/s (1 rev/s)\n");
         stepper_set_velocity(STEPPER_LEFT, 360.0f);
-        k_sleep(K_SECONDS(2));  // 2 revolutions forward
+        k_sleep(K_SECONDS(1));  
 
         // Stop
         printk("Stop\n");
@@ -38,9 +38,9 @@ int main(void)
         k_sleep(K_SECONDS(1));
 
         // Reverse rotation
-        printk("Reverse: -180°/s (0.5 rev/s)\n");
+        printk("Reverse: -360°/s (1 rev/s)\n");
         stepper_set_velocity(STEPPER_LEFT, -180.0f);
-        k_sleep(K_SECONDS(2));  // 1 revolution backward
+        k_sleep(K_SECONDS(1));
 
         // Stop and pause
         printk("Stop - End of cycle\n");
