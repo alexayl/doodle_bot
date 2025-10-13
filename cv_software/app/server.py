@@ -12,7 +12,9 @@ from app.bt_link import BTLink
 from app.path_parse import load_gcode_file
 from app.utils import encode_jpeg, Metrics
 
-USE_TURBOJPEG = True  # encode_jpeg handles fallback
+cv2.setNumThreads(1)
+
+USE_TURBOJPEG = True
 CAMERA_SRC = int(os.getenv("CAMERA_SRC", "0"))
 PATHFINDING_DIR = os.getenv(
     "PATHFINDING_DIR",
@@ -42,12 +44,57 @@ RUN = PathRun()
 
 _cv_thread = None
 _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
-_MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5")) 
+_MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
+
+# -------- single shared JPEG encoder --------
+_STREAM_Q = int(os.getenv("STREAM_Q", "50"))
+_STREAM_FPS = float(os.getenv("STREAM_FPS", "6"))
+_last_jpeg: bytes | None = None
+_last_jpeg_ts: float = 0.0
+_jpeg_thread = None
+_jpeg_lock = threading.Lock()
+
+def _jpeg_loop(overlay_factory):
+    global _last_jpeg, _last_jpeg_ts
+    draw = overlay_factory() if callable(overlay_factory) else overlay_factory
+    period = 1.0 / max(1.0, float(_STREAM_FPS))
+    next_t = time.perf_counter()
+    while True:
+        cam = get_cam()
+        if cam is None:
+            time.sleep(0.02)
+            continue
+        frame, ts = cam.get_latest_with_ts()
+        if frame is None:
+            time.sleep(0.01)
+            continue
+        now = time.perf_counter()
+        if now < next_t:
+            time.sleep(max(0.0, next_t - now))
+            continue
+        next_t = now + period
+        if draw:
+            frame = draw(frame)
+        jpg = encode_jpeg(frame, quality=_STREAM_Q)
+        if jpg is None:
+            continue
+        with _jpeg_lock:
+            _last_jpeg = jpg
+            _last_jpeg_ts = ts
+
+def _ensure_jpeg_thread():
+    global _jpeg_thread
+    if _jpeg_thread is None:
+        _jpeg_thread = threading.Thread(target=_jpeg_loop, args=(overlay_fn,), daemon=True)
+        _jpeg_thread.start()
+
+# --------------------------------------------
 
 def _clamp(v: float, m: float) -> float:
     return -m if v < -m else (m if v > m else v)
-def _process_frame_once(frame) -> tuple[bool, float]:
-    t0 = time.perf_counter()
+
+def _process_frame_once(frame, capture_ts: float) -> tuple[bool, float, float]:
+    t0 = time.monotonic()
     try:
         valid, _ = cvp.process_frame(frame)
     except Exception:
@@ -60,23 +107,10 @@ def _process_frame_once(frame) -> tuple[bool, float]:
             valid = bool(st2["calibrated"] and st2["bot_pose"] is not None)
         except Exception:
             valid = False
-    return bool(valid), (time.perf_counter() - t0)
+    pose_ts = time.monotonic()
+    return bool(valid), (pose_ts - t0), (pose_ts - capture_ts)
 
 def _cv_worker():
-    """Core closed-loop executor running in a background thread.
-
-    Behavior:
-      * Waits for firmware IDLE via BTLink.
-      * Batches a few (fwd,left) steps from PathFollower (robot frame).
-      * ALWAYS applies CV-based error nudging before sending vertices:
-          - Error = current target (board mm) - current pose (board mm)
-          - Proportional, saturated corrections rotated into robot frame
-      * Sends batched vertices to firmware.
-
-      - This is the one place where instructions are improved by CV.
-      - If CV confidence is low, corrections are small; if pose is unavailable,
-        it still streams the planned step (fails safe).
-    """
     try:
         bt_link.connect()
     except Exception:
@@ -86,25 +120,36 @@ def _cv_worker():
     batch_vertices = 8
     idle_timeout_s = 1.0
 
+    IDLE_HZ   = float(os.getenv("CV_IDLE_HZ", "8"))
+    ACTIVE_HZ = float(os.getenv("CV_ACTIVE_HZ", "20"))
+    next_t = time.perf_counter()
+
     while True:
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
             continue
 
-        frame = cam.get_latest_good()
+        target_hz = ACTIVE_HZ if RUN.active else IDLE_HZ
+        period = 1.0 / target_hz
+        now = time.perf_counter()
+        if now < next_t:
+            time.sleep(max(0.0, next_t - now))
+            continue
+        next_t = now + period
+
+        frame, capture_ts = cam.get_latest_with_ts()
         if frame is None:
-            time.sleep(0.004)
             continue
 
-        valid, tproc = _process_frame_once(frame)
-        MET.note(valid, tproc)
+        valid, tproc, te2e = _process_frame_once(frame, capture_ts)
+        MET.note(valid, tproc, te2e, ts_now=time.monotonic())
 
         if RUN.active and bt_link.wait_idle(idle_timeout_s):
             pose = cvp.get_pose_mm()
             vertices: List[tuple[float, float]] = []
             for _ in range(batch_vertices):
-                step = RUN.follower.step(pose)  # (fwd, lef) in ROBOT frame
+                step = RUN.follower.step(pose)
                 if step is None:
                     RUN.stop()
                     break
@@ -115,9 +160,8 @@ def _cv_worker():
                     and st["bot_pose"] is not None
                     and st["bot_pose"]["confidence"] >= 0.60
                 )
-
                 if ok_conf and pose is not None:
-                    err = RUN.follower.current_error(pose)  # single source of truth
+                    err = RUN.follower.current_error(pose)
                     if err is not None:
                         ex, ey, _tgt = err
                         cx = _clamp(_K_GAIN * ex, _MAX_CORR_MM)
@@ -125,18 +169,13 @@ def _cv_worker():
                         corr = cvp.corrected_delta_for_bt((cx, cy), rotate_into_bot_frame=True)
                         if corr is not None:
                             step = (step[0] + float(corr[0]), step[1] + float(corr[1]))
-                # -------------------------------------------------------------------
-
                 vertices.append(step)
-                pose = cvp.get_pose_mm()  # refresh pose for next iteration
-
+                pose = cvp.get_pose_mm()
             if vertices:
                 try:
                     bt_link.send_waypoints(vertices)
                 except Exception:
                     pass
-
-        time.sleep(0.004)
 
 def _ensure_cv_thread():
     global _cv_thread
@@ -155,12 +194,10 @@ def overlay_fn():
                 pass
         else:
             line1 += " | CALIBRATING..."
-
         run_txt = f"Run: {'ON' if RUN.active else 'OFF'} {RUN.follower.index()}/{RUN.follower.total()}"
-        line2 = f"Rate: {MET.rate_hz():.1f} Hz | Median cam→pose: {MET.median_latency_ms():.0f} ms | Uptime: {MET.uptime_pct:.1f}% | {run_txt}"
+        line2 = f"Rate: {MET.rate_hz():.1f} Hz | Median cam→pose: {MET.median_e2e_ms():.0f} ms | Uptime: {MET.uptime_pct:.1f}% | {run_txt}"
         cv2.putText(frame, line1, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.putText(frame, line2, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
-
         if st["bot_pose"] is not None and st["calibrated"]:
             bp = cvp.cal.board_pose
             if bp is not None:
@@ -171,48 +208,6 @@ def overlay_fn():
         return frame
     return _draw
 
-def gen_frames(overlay_factory, quality=65, max_fps=10.0):
-    _ensure_cv_thread()
-    draw = overlay_factory() if callable(overlay_factory) else overlay_factory
-    boundary = b"--frame\r\n"
-    last_ts = 0.0
-    period = 1.0 / float(max_fps)
-    next_t = time.perf_counter()
-
-    while True:
-        cam = get_cam()
-        if cam is None:
-            time.sleep(0.02)
-            continue
-
-        frame, ts = cam.get_latest_with_ts()
-        if frame is None:
-            time.sleep(0.005)
-            continue
-
-        # simple FPS gate
-        now = time.perf_counter()
-        if now < next_t:
-            time.sleep(max(0.0, next_t - now))
-            continue
-        next_t = now + period
-
-        if ts <= last_ts:
-            time.sleep(0.002)
-            continue
-        last_ts = ts
-
-        if draw:
-            frame = draw(frame)
-
-        jpg = encode_jpeg(frame, quality=quality)
-        if jpg is None:
-            continue
-
-        yield (boundary +
-               b"Content-Type: image/jpeg\r\nCache-Control: no-store\r\n\r\n" +
-               jpg + b"\r\n")
-
 @app.after_request
 def _no_buffer(resp):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -221,22 +216,6 @@ def _no_buffer(resp):
     return resp
 
 def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
-    """
-    Convert incremental G1 moves from parsed G-code into [0..1] normalized waypoints.
-
-    Input
-    -----
-    ops : List[tuple]
-        Output of `load_gcode_file(...)`, where each item looks like:
-        ("move", dx, dy) in *incremental* (G91) millimeters. ("pen", bool) lines are ignored.
-
-    Output
-    ------
-    List[Waypoint]
-        Waypoints with x_mm,y_mm each in [0,1], preserving the original path’s
-        aspect ratio and relative geometry. These are later scaled to board mm
-        via `cvp.fit_path_to_board(...)`.
-    """
     x = y = 0.0
     pts: List[tuple[float, float]] = []
     for op in ops:
@@ -256,18 +235,7 @@ def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
         norm.append(Waypoint(x_mm=float(nx), y_mm=float(ny)))
     return norm
 
-
 def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
-    """
-    Load `pathfinding/<name>.gcode`, parse incremental moves, and return normalized waypoints.
-
-    This is a thin wrapper around the G-code parser that:
-      1) finds `<repo-root>/pathfinding/<name>.gcode`,
-      2) parses it to ("move", dx, dy) ops,
-      3) converts to [0..1] waypoints via `_ops_to_normalized_wps`.
-
-    Returns an empty list if the file is missing or can’t be parsed.
-    """
     bases = [os.path.join(PATHFINDING_DIR, f"{name}.gcode")]
     ops: List[tuple] = []
     for p in bases:
@@ -281,12 +249,10 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
         return []
     return _ops_to_normalized_wps(ops)
 
-
 def _emit_gcode(ops: List[tuple]) -> str:
-    """ops: [("pen", bool)|("move", dx,dy,dz)]. Returns a G-code string."""
-    lines, pen_down = ["G91"], False  # incremental
+    lines, pen_down = ["G91"], False
     for op in ops:
-        if not op: 
+        if not op:
             continue
         if op[0] == "pen":
             down = bool(op[1])
@@ -301,22 +267,23 @@ def _emit_gcode(ops: List[tuple]) -> str:
             if len(parts) > 1: lines.append(" ".join(parts))
     if pen_down:
         lines.append("M5")
-    lines.append("G90")  # back to absolute
+    lines.append("G90")
     return "\n".join(lines) + "\n"
 
 @app.route("/")
 def home():
     _ensure_cv_thread()
+    _ensure_jpeg_thread()
     STATE["mode"] = "home"
     return render_template("index.html", page="home")
 
 @app.route("/erase", methods=["GET", "POST"])
 def erase():
     _ensure_cv_thread()
+    _ensure_jpeg_thread()
     STATE["mode"] = "erase"
     msg = None
     error = None
-
     if request.method == "POST":
         action = request.form.get("action", "start")
         if action == "stop":
@@ -326,7 +293,6 @@ def erase():
             except Exception:
                 pass
             return redirect(url_for("erase"))
-
         raw_norm = _load_named_gcode_normalized("erase")
         if not raw_norm:
             error = "No erase path found in pathfinding directory."
@@ -339,16 +305,15 @@ def erase():
                 RUN.start()
                 msg = f"Erase queued with {len(fitted)} vertices (firmware will smooth)."
         return render_template("index.html", page="erase", msg=msg, error=error)
-
     return render_template("index.html", page="erase", msg=msg, error=error)
 
 @app.route("/draw", methods=["GET", "POST"])
 def draw():
     _ensure_cv_thread()
+    _ensure_jpeg_thread()
     STATE["mode"] = "draw"
     msg = None
     error = None
-
     if request.method == "POST":
         action = request.form.get("action", "start")
         if action == "stop":
@@ -358,17 +323,13 @@ def draw():
             except Exception:
                 pass
             return redirect(url_for("draw"))
-
         uploaded_file = request.files.get("file")
         raw_norm: List[Waypoint] = []
-
         if uploaded_file and uploaded_file.filename:
             fname = secure_filename(uploaded_file.filename)
             img_path = os.path.join("uploads", fname)
             uploaded_file.save(img_path)
             STATE["target_image"] = fname
-
-            # need to finalize integrate pathfinding (image -> G-code)
             out_gcode = os.path.join("uploads", os.path.splitext(fname)[0] + ".gcode")
             try:
                 ops = load_gcode_file(out_gcode)
@@ -376,13 +337,11 @@ def draw():
             except Exception:
                 raw_norm = []
                 error = error or "Could not convert the uploaded image to a path."
-
         if not raw_norm:
             fallback = _load_named_gcode_normalized("draw")
             if not fallback and error is None:
                 error = "No draw path found and no valid uploaded image."
             raw_norm = fallback
-
         if raw_norm:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
             if not fitted:
@@ -391,7 +350,6 @@ def draw():
                 RUN.load(fitted)
                 RUN.start()
                 msg = f"Draw queued with {len(fitted)} vertices (firmware will smooth)."
-
         return render_template(
             "index.html",
             page="draw",
@@ -400,7 +358,6 @@ def draw():
             msg=msg,
             error=error
         )
-
     return render_template(
         "index.html",
         page="draw",
@@ -412,22 +369,23 @@ def draw():
 
 @app.route("/stream")
 def stream():
-    try:
-        q = int(request.args.get("q", "65"))
-    except ValueError:
-        q = 65
-    q = max(40, min(q, 90))
-
-    try:
-        fps = float(request.args.get("fps", "10"))
-    except ValueError:
-        fps = 10.0
-    fps = max(1.0, min(fps, 30.0))
-
-    return Response(
-        gen_frames(overlay_fn, quality=q, max_fps=fps),
-        mimetype="multipart/x-mixed-replace; boundary=frame"
-    )
+    _ensure_cv_thread()
+    _ensure_jpeg_thread()
+    boundary = b"--frame\r\n"
+    def _gen():
+        last_seen = 0.0
+        while True:
+            with _jpeg_lock:
+                jpg = _last_jpeg
+                ts = _last_jpeg_ts
+            if jpg is None or ts == last_seen:
+                time.sleep(0.02)
+                continue
+            last_seen = ts
+            yield (boundary +
+                   b"Content-Type: image/jpeg\r\nCache-Control: no-store\r\n\r\n" +
+                   jpg + b"\r\n")
+    return Response(_gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 def _shutdown():
     try:
@@ -446,4 +404,9 @@ if __name__ == "__main__":
     except Exception:
         pass
     _ensure_cv_thread()
+    _ensure_jpeg_thread()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), threaded=True, debug=False)
+#run command STREAM_FPS=6 STREAM_Q=50 \
+# CAMERA_W=640 CAMERA_H=360 CAMERA_FPS=10 CAMERA_USE_MJPEG=1 CAMERA_BUFFER_SIZE=1 \
+# CV_IDLE_HZ=8 CV_ACTIVE_HZ=20 \
+# gunicorn server:app -w 1 -k gevent -b 0.0.0.0:5000 --timeout 0
