@@ -171,11 +171,13 @@ def overlay_fn():
         return frame
     return _draw
 
-def gen_frames(overlay_factory, quality=65):
+def gen_frames(overlay_factory, quality=65, max_fps=10.0):
     _ensure_cv_thread()
     draw = overlay_factory() if callable(overlay_factory) else overlay_factory
     boundary = b"--frame\r\n"
     last_ts = 0.0
+    period = 1.0 / float(max_fps)
+    next_t = time.perf_counter()
 
     while True:
         cam = get_cam()
@@ -187,6 +189,13 @@ def gen_frames(overlay_factory, quality=65):
         if frame is None:
             time.sleep(0.005)
             continue
+
+        # simple FPS gate
+        now = time.perf_counter()
+        if now < next_t:
+            time.sleep(max(0.0, next_t - now))
+            continue
+        next_t = now + period
 
         if ts <= last_ts:
             time.sleep(0.002)
@@ -200,7 +209,9 @@ def gen_frames(overlay_factory, quality=65):
         if jpg is None:
             continue
 
-        yield boundary + b"Content-Type: image/jpeg\r\nCache-Control: no-store\r\n\r\n" + jpg + b"\r\n"
+        yield (boundary +
+               b"Content-Type: image/jpeg\r\nCache-Control: no-store\r\n\r\n" +
+               jpg + b"\r\n")
 
 @app.after_request
 def _no_buffer(resp):
@@ -406,7 +417,17 @@ def stream():
     except ValueError:
         q = 65
     q = max(40, min(q, 90))
-    return Response(gen_frames(overlay_fn, quality=q), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+    try:
+        fps = float(request.args.get("fps", "10"))
+    except ValueError:
+        fps = 10.0
+    fps = max(1.0, min(fps, 30.0))
+
+    return Response(
+        gen_frames(overlay_fn, quality=q, max_fps=fps),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
 
 def _shutdown():
     try:
