@@ -17,6 +17,13 @@ def encode_jpeg(frame: np.ndarray, quality: int = 65) -> bytes | None:
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return buf.tobytes() if ok else None
 
+def board_to_robot(dx_board: float, dy_board: float, heading_rad: float) -> Tuple[float, float]:
+    c = math.cos(-heading_rad)
+    s = math.sin(-heading_rad)
+    fwd = c * dx_board - s * dy_board
+    lef = -(s * dx_board + c * dy_board)
+    return float(fwd), float(lef)
+
 class Metrics:
     def __init__(self, maxlen: int = 240):
         self.proc_hist = deque(maxlen=maxlen)
