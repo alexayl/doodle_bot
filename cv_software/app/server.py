@@ -1,20 +1,18 @@
 from __future__ import annotations
 from flask import Flask, Response, request, render_template, redirect, url_for
-import cv2
-import os
-import time
-import threading
-from collections import deque
-from typing import List
-import numpy as np
+import cv2, os, time, threading, numpy as np
+from typing import List, Tuple
 from werkzeug.utils import secure_filename
+import faulthandler
+
 from app.cv_core import CVPipeline
 from app.control import PathRun, Waypoint
 from app.camera import ThreadedCamera, CameraConfig
 from app.bt_link import BTLink
 from app.path_parse import load_gcode_file
+from app.utils import encode_jpeg, Metrics
 
-USE_TURBOJPEG = os.getenv("DISABLE_TURBOJPEG", "0") not in ("1", "true", "True")
+USE_TURBOJPEG = True  # encode_jpeg handles fallback
 CAMERA_SRC = int(os.getenv("CAMERA_SRC", "0"))
 PATHFINDING_DIR = os.getenv(
     "PATHFINDING_DIR",
@@ -25,75 +23,9 @@ app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
 
 STATE = {"mode": "home", "target_image": None}
-
-_METRICS = {
-    "t_hist": deque(maxlen=240),
-    "ts_hist": deque(maxlen=240),
-    "valid_frames": 0,
-    "total_frames": 0,
-    "uptime_pct": 0.0,
-}
-
-def _note_frame(valid: bool, t_proc_s: float):
-    _METRICS["t_hist"].append(t_proc_s)
-    _METRICS["ts_hist"].append(time.monotonic())
-    _METRICS["total_frames"] += 1
-    if valid:
-        _METRICS["valid_frames"] += 1
-    total = max(1, _METRICS["total_frames"])
-    _METRICS["uptime_pct"] = 100.0 * _METRICS["valid_frames"] / total
-
-def _rate_hz() -> float:
-    ts = list(_METRICS["ts_hist"])
-    if len(ts) < 3:
-        return 0.0
-    dur = ts[-1] - ts[0]
-    if dur <= 1e-6:
-        return 0.0
-    return float(len(ts) - 1) / float(dur)
-
-def _median_latency_ms() -> float:
-    arr = sorted(_METRICS["t_hist"])
-    if not arr:
-        return 0.0
-    n = len(arr)
-    mid = n // 2
-    if n % 2:
-        med = arr[mid]
-    else:
-        med = 0.5 * (arr[mid - 1] + arr[mid])
-    return 1000.0 * med
-
-_jpeg = None
-
-def _get_jpeg():
-    global _jpeg
-    if _jpeg is not None:
-        return _jpeg
-    if not USE_TURBOJPEG:
-        _jpeg = False
-        return _jpeg
-    try:
-        from turbojpeg import TurboJPEG
-        _jpeg = TurboJPEG()
-    except Exception:
-        _jpeg = False
-    return _jpeg
-
-def _encode_jpeg(frame, quality=65):
-    tj = _get_jpeg()
-    if tj:
-        try:
-            return tj.encode(frame, quality=int(quality), jpeg_subsample=2, flags=512)
-        except Exception:
-            pass
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
-    if not ok:
-        return None
-    return buf.tobytes()
+MET = Metrics(maxlen=240)
 
 _cam = None
-
 def get_cam() -> ThreadedCamera | None:
     global _cam
     if _cam is None:
@@ -109,34 +41,42 @@ bt_link = BTLink()
 RUN = PathRun()
 
 _cv_thread = None
+_K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
+_MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5")) 
 
+def _clamp(v: float, m: float) -> float:
+    return -m if v < -m else (m if v > m else v)
 def _process_frame_once(frame) -> tuple[bool, float]:
     t0 = time.perf_counter()
     try:
         valid, _ = cvp.process_frame(frame)
-        t_proc = time.perf_counter() - t0
-        return bool(valid), t_proc
     except Exception:
-        pass
-
-    st = cvp.get_state()
-    do_cal = not st["calibrated"] or st["mm_per_px"] is None or (time.monotonic() % 2.0) < 0.05
-    if do_cal:
         try:
-            cvp.calibrate_board(frame)
+            st = cvp.get_state()
+            if (not st["calibrated"]) or (st["mm_per_px"] is None) or ((time.monotonic() % 2.0) < 0.05):
+                cvp.calibrate_board(frame)
+            cvp.update_bot(frame)
+            st2 = cvp.get_state()
+            valid = bool(st2["calibrated"] and st2["bot_pose"] is not None)
         except Exception:
-            pass
-    try:
-        cvp.update_bot(frame)
-    except Exception:
-        pass
-
-    st2 = cvp.get_state()
-    valid = bool(st2["calibrated"] and st2["bot_pose"] is not None)
-    t_proc = time.perf_counter() - t0
-    return valid, t_proc
+            valid = False
+    return bool(valid), (time.perf_counter() - t0)
 
 def _cv_worker():
+    """Core closed-loop executor running in a background thread.
+
+    Behavior:
+      * Waits for firmware IDLE via BTLink.
+      * Batches a few (fwd,left) steps from PathFollower (robot frame).
+      * ALWAYS applies CV-based error nudging before sending vertices:
+          - Error = current target (board mm) - current pose (board mm)
+          - Proportional, saturated corrections rotated into robot frame
+      * Sends batched vertices to firmware.
+
+      - This is the one place where instructions are improved by CV.
+      - If CV confidence is low, corrections are small; if pose is unavailable,
+        it still streams the planned step (fails safe).
+    """
     try:
         bt_link.connect()
     except Exception:
@@ -158,18 +98,38 @@ def _cv_worker():
             continue
 
         valid, tproc = _process_frame_once(frame)
-        _note_frame(valid, tproc)
+        MET.note(valid, tproc)
 
         if RUN.active and bt_link.wait_idle(idle_timeout_s):
             pose = cvp.get_pose_mm()
             vertices: List[tuple[float, float]] = []
             for _ in range(batch_vertices):
-                step = RUN.follower.step(pose)
+                step = RUN.follower.step(pose)  # (fwd, lef) in ROBOT frame
                 if step is None:
                     RUN.stop()
                     break
+                st = cvp.get_state()
+                ok_conf = (
+                    st["calibrated"]
+                    and (st["board_confidence"] is None or st["board_confidence"] >= 0.60)
+                    and st["bot_pose"] is not None
+                    and st["bot_pose"]["confidence"] >= 0.60
+                )
+
+                if ok_conf and pose is not None:
+                    err = RUN.follower.current_error(pose)  # single source of truth
+                    if err is not None:
+                        ex, ey, _tgt = err
+                        cx = _clamp(_K_GAIN * ex, _MAX_CORR_MM)
+                        cy = _clamp(_K_GAIN * ey, _MAX_CORR_MM)
+                        corr = cvp.corrected_delta_for_bt((cx, cy), rotate_into_bot_frame=True)
+                        if corr is not None:
+                            step = (step[0] + float(corr[0]), step[1] + float(corr[1]))
+                # -------------------------------------------------------------------
+
                 vertices.append(step)
-                pose = cvp.get_pose_mm()
+                pose = cvp.get_pose_mm()  # refresh pose for next iteration
+
             if vertices:
                 try:
                     bt_link.send_waypoints(vertices)
@@ -197,7 +157,7 @@ def overlay_fn():
             line1 += " | CALIBRATING..."
 
         run_txt = f"Run: {'ON' if RUN.active else 'OFF'} {RUN.follower.index()}/{RUN.follower.total()}"
-        line2 = f"Rate: {_rate_hz():.1f} Hz | Median cam→pose: {_median_latency_ms():.0f} ms | Uptime: {_METRICS['uptime_pct']:.1f}% | {run_txt}"
+        line2 = f"Rate: {MET.rate_hz():.1f} Hz | Median cam→pose: {MET.median_latency_ms():.0f} ms | Uptime: {MET.uptime_pct:.1f}% | {run_txt}"
         cv2.putText(frame, line1, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.putText(frame, line2, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
 
@@ -205,12 +165,9 @@ def overlay_fn():
             bp = cvp.cal.board_pose
             if bp is not None:
                 cx, cy = st["bot_pose"]["center_board_px"]
-                pt_board = np.float32([[cx, cy]])
                 Hinv = np.linalg.inv(bp.H_img2board)
-                pt_img = cv2.perspectiveTransform(pt_board[None], Hinv)[0][0]
-                x = int(pt_img[0])
-                y = int(pt_img[1])
-                cv2.circle(frame, (x, y), 8, (0, 255, 255), -1)
+                pt_img = cv2.perspectiveTransform(np.float32([[cx, cy]])[None], Hinv)[0][0]
+                cv2.circle(frame, (int(pt_img[0]), int(pt_img[1])), 8, (0, 255, 255), -1)
         return frame
     return _draw
 
@@ -239,7 +196,7 @@ def gen_frames(overlay_factory, quality=65):
         if draw:
             frame = draw(frame)
 
-        jpg = _encode_jpeg(frame, quality=quality)
+        jpg = encode_jpeg(frame, quality=quality)
         if jpg is None:
             continue
 
@@ -253,24 +210,32 @@ def _no_buffer(resp):
     return resp
 
 def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
-    x = 0.0
-    y = 0.0
+    """
+    Convert incremental G1 moves from parsed G-code into [0..1] normalized waypoints.
+
+    Input
+    -----
+    ops : List[tuple]
+        Output of `load_gcode_file(...)`, where each item looks like:
+        ("move", dx, dy) in *incremental* (G91) millimeters. ("pen", bool) lines are ignored.
+
+    Output
+    ------
+    List[Waypoint]
+        Waypoints with x_mm,y_mm each in [0,1], preserving the original path’s
+        aspect ratio and relative geometry. These are later scaled to board mm
+        via `cvp.fit_path_to_board(...)`.
+    """
+    x = y = 0.0
     pts: List[tuple[float, float]] = []
     for op in ops:
-        if not op:
-            continue
-        if op[0] == "move":
-            x += float(op[1])
-            y += float(op[2])
+        if op and op[0] == "move":
+            x += float(op[1]); y += float(op[2])
             pts.append((x, y))
     if not pts:
         return []
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    minx = min(xs)
-    maxx = max(xs)
-    miny = min(ys)
-    maxy = max(ys)
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
     w = max(maxx - minx, 1e-6)
     h = max(maxy - miny, 1e-6)
     norm: List[Waypoint] = []
@@ -280,7 +245,18 @@ def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
         norm.append(Waypoint(x_mm=float(nx), y_mm=float(ny)))
     return norm
 
+
 def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
+    """
+    Load `pathfinding/<name>.gcode`, parse incremental moves, and return normalized waypoints.
+
+    This is a thin wrapper around the G-code parser that:
+      1) finds `<repo-root>/pathfinding/<name>.gcode`,
+      2) parses it to ("move", dx, dy) ops,
+      3) converts to [0..1] waypoints via `_ops_to_normalized_wps`.
+
+    Returns an empty list if the file is missing or can’t be parsed.
+    """
     bases = [os.path.join(PATHFINDING_DIR, f"{name}.gcode")]
     ops: List[tuple] = []
     for p in bases:
@@ -293,6 +269,29 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
     if not ops:
         return []
     return _ops_to_normalized_wps(ops)
+
+
+def _emit_gcode(ops: List[tuple]) -> str:
+    """ops: [("pen", bool)|("move", dx,dy,dz)]. Returns a G-code string."""
+    lines, pen_down = ["G91"], False  # incremental
+    for op in ops:
+        if not op: 
+            continue
+        if op[0] == "pen":
+            down = bool(op[1])
+            lines.append("M3" if down else "M5")
+            pen_down = down
+        elif op[0] == "move":
+            _, dx, dy, dz = op
+            parts = ["G1"]
+            if abs(dx) > 1e-9: parts.append(f"X{dx:.3f}")
+            if abs(dy) > 1e-9: parts.append(f"Y{dy:.3f}")
+            if abs(dz) > 1e-9: parts.append(f"Z{dz:.3f}")
+            if len(parts) > 1: lines.append(" ".join(parts))
+    if pen_down:
+        lines.append("M5")
+    lines.append("G90")  # back to absolute
+    return "\n".join(lines) + "\n"
 
 @app.route("/")
 def home():
@@ -350,25 +349,22 @@ def draw():
             return redirect(url_for("draw"))
 
         uploaded_file = request.files.get("file")
-        raw_norm = []
+        raw_norm: List[Waypoint] = []
 
         if uploaded_file and uploaded_file.filename:
-            os.makedirs("uploads", exist_ok=True)
             fname = secure_filename(uploaded_file.filename)
             img_path = os.path.join("uploads", fname)
             uploaded_file.save(img_path)
             STATE["target_image"] = fname
 
+            # need to finalize integrate pathfinding (image -> G-code)
             out_gcode = os.path.join("uploads", os.path.splitext(fname)[0] + ".gcode")
-            ok = True# need to integrate with pf
-            if ok:
-                try:
-                    ops = load_gcode_file(out_gcode)
-                    raw_norm = _ops_to_normalized_wps(ops)
-                except Exception:
-                    raw_norm = []
-            else:
-                error = "Could not convert the uploaded image to a path."
+            try:
+                ops = load_gcode_file(out_gcode)
+                raw_norm = _ops_to_normalized_wps(ops)
+            except Exception:
+                raw_norm = []
+                error = error or "Could not convert the uploaded image to a path."
 
         if not raw_norm:
             fallback = _load_named_gcode_normalized("draw")
@@ -402,6 +398,7 @@ def draw():
         msg=msg,
         error=error
     )
+
 @app.route("/stream")
 def stream():
     try:
@@ -424,7 +421,6 @@ def _shutdown():
 
 if __name__ == "__main__":
     try:
-        import faulthandler
         faulthandler.enable()
     except Exception:
         pass

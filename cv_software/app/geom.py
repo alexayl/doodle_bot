@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import List, Tuple
 from app.control import Waypoint
-
 def fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
     if not wps:
         return []

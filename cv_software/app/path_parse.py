@@ -5,6 +5,15 @@ from typing import List, Tuple, Optional
 __all__ = ["load_gcode_file"]
 
 def load_gcode_file(path: str) -> List[Tuple]:
+    """
+    Load G-code commands from a file and parse them into a list of operations.
+
+    Args:
+        path (str): The file path to the G-code file.
+
+    Returns:
+        List[Tuple]: A list of parsed operations, where each operation is represented as a tuple.
+    """
     text = _read_text(path).strip()
     ops: List[Tuple] = []
     inc_mode = False
