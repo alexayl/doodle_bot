@@ -273,7 +273,7 @@ class CVPipeline:
         else:
             cx = self._ema(self._pose_smooth.center_board_px[0], bot.center_board_px[0], _POSE_ALPHA)
             cy = self._ema(self._pose_smooth.center_board_px[1], bot.center_board_px[1], _POSE_ALPHA)
-            hd = _ema_angle(self._pose_smooth.heading_rad, bot.heading_rad, _POSE_ALPHA)
+            hd = self._ema_angle(self._pose_smooth.heading_rad, bot.heading_rad, _POSE_ALPHA)
 
             self._pose_smooth = BotPose(
                 center_board_px=(cx, cy),
