@@ -429,4 +429,5 @@ Buzzer:        P0.15
 - **Power Management**: Sleep modes and current reduction during idle
 - **Dual Motor Coordination**: Synchronized control for differential drive
 - **Safety Features**: Thermal protection and stall detection
+- **Integration**: Integrate with Core Firmware
 
