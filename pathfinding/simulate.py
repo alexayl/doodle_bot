@@ -100,7 +100,7 @@ def simulate(filename, canvas_size=(575, 730)):
     
     # Create animation
     anim = animation.FuncAnimation(fig, animate, frames=len(commands), 
-                                 interval=5, blit=True, repeat=False)
+                                 interval=3, blit=True, repeat=False)
     
     plt.show()
     return anim
