@@ -15,11 +15,11 @@ def path2gcode(path, filename="output.gcode"):
     def write_move(dx, dy, dz=0):
         gcode.append(f"G1 {dx} {dy} {dz}")
 
-    print(path)
-
-    for s, segment in enumerate(path[1:]):
+    for s, segment in enumerate(path):
+        if s == 0:
+            continue
         for p, point in enumerate(segment):
-            if point == segment[0]:
+            if p == 0:
                 prev_point = path[s-1][-1]
                 dz = -1
             elif point == segment[-1]:
