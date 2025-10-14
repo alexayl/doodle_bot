@@ -13,7 +13,7 @@ project(app LANGUAGES C CXX)
 if(CONFIG_LED_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/led/led_control.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/led/led_gpio.c
+        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
     )
 elseif(CONFIG_BUZZER_TEST)
     target_sources(app PRIVATE
@@ -42,6 +42,14 @@ elseif(CONFIG_STEPPER_TEST)
     target_sources(app PRIVATE
         ${CMAKE_SOURCE_DIR}/../tests/stepper/stepper_control.cpp
         ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+    )
+elseif(CONFIG_PERIPHERAL_DEMO)
+    target_sources(app PRIVATE
+        ${CMAKE_SOURCE_DIR}/../tests/demo/peripheral_demo.cpp
+        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
+        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
+        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
     )
 else()
     file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
