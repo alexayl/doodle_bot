@@ -1,0 +1,114 @@
+/ {
+    aliases {
+        servo0 = &servo;
+        servo1 = &servo_marker;
+    };
+
+    /* Servo motor for eraser control - GPIO2 PWM */
+    servo_eraser: servo_eraser {
+        status = "okay";
+        compatible = "doodle_servo";
+        pwms = <&ledc0 0 20000000 0>; /* 20ms period, channel 0, normal polarity - GPIO2 */
+        label = "SERVO_ERASER";
+    };
+
+    /* Servo motor for marker control - GPIO3 PWM */
+    servo_marker: servo_marker {
+        status = "okay";
+        compatible = "doodle_servo";
+        pwms = <&ledc0 1 20000000 0>; /* 20ms period, channel 1, normal polarity - GPIO3 */
+        label = "SERVO_MARKER";
+    };
+
+    /* Left stepper motor via A4988 driver */
+    stepper_left: stepper_left {
+        status = "okay";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* GPIO5 - Step pulses */
+        dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* GPIO6 - Direction control */
+        en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* GPIO7 - Enable/disable */
+        label = "LEFT_STEPPER";
+    };
+
+    /* Right stepper motor via A4988 driver - DISABLED (no driver available) */
+    stepper_right: stepper_right {
+        status = "disabled";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;      /* GPIO8 - Step pulses */
+        dir-gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;       /* GPIO9 - Direction control */
+        en-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;        /* GPIO10 - Enable/disable */
+        label = "RIGHT_STEPPER";
+    };
+
+    /* GPIO LED configuration */
+    leds {
+        compatible = "gpio-leds";
+        led1: led_1 {
+            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>; /* GPIO11 - External LED */
+            label = "STATUS_LED";
+        };
+    };
+
+    /* GPIO Buzzer configuration */
+    buzzer: buzzer {
+        compatible = "gpio-buzzer";
+        gpios = <&gpio0 12 GPIO_ACTIVE_HIGH>; /* GPIO12 - Buzzer */
+        label = "BUZZER";
+    };
+
+    /* PWM Buzzer with volume control - separate from GPIO buzzer */
+    pwm_buzzer: pwm_buzzer {
+        compatible = "pwm-buzzer";
+        pwms = <&ledc0 2 2500000 0>; /* GPIO12 - 400Hz, Channel 2, normal polarity */
+        label = "PWM_BUZZER";
+    };
+
+    aliases {
+        stepper-left = &stepper_left;
+        stepper-right = &stepper_right;
+        servo-eraser = &servo_eraser;
+        servo-marker = &servo_marker;
+        servo0 = &servo_eraser;
+        servo1 = &servo_marker;
+        led0 = &led1;
+        buzzer0 = &buzzer;
+        pwm-buzzer0 = &pwm_buzzer;
+    };
+};
+
+&ledc0 {
+    status = "okay";
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    #pwm-cells = <3>;
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0x0>;
+        timer = <0>;
+    };
+
+    channel1@1 {
+        reg = <0x1>;
+        timer = <0>;
+    };
+
+    channel2@2 {
+        reg = <0x2>;
+        timer = <0>;
+    };
+};
+
+&pinctrl {
+    ledc0_default: ledc0_default {
+        group1 {
+            pinmux = <LEDC_CH0_GPIO2>,   /* GPIO2 - Servo PWM on Channel 0 */
+                     <LEDC_CH1_GPIO3>,   /* GPIO3 - Servo PWM on Channel 1 */
+                     <LEDC_CH2_GPIO12>;  /* GPIO12 - Buzzer PWM on Channel 2 */
+            output-enable;
+        };
+    };
+};

@@ -38,6 +38,11 @@ void buzzer_init(void)
     LOG_INF("Buzzer initialized on GPIO pin %d", buzzer_gpio.pin);
 }
 
+bool buzzer_is_ready(void)
+{
+    return device_is_ready(buzzer_gpio.port);
+}
+
 void buzzer_on(void)
 {
     int ret = gpio_pin_set_dt(&buzzer_gpio, 1);

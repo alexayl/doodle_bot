@@ -2,11 +2,15 @@
 
 description: Simple servo motor driver using PWM
 
-compatible: "doodle-servo"
+compatible: "doodle_servo"
 
 include: base.yaml
 
 properties:
+  label:
+    type: string
+    description: Human readable string describing the device.
+
   pwms:
     type: phandle-array
     required: true

@@ -82,22 +82,37 @@ int stepper_stop(enum stepper_motor motor);
 float stepper_get_velocity(enum stepper_motor motor);
 ```
 
-**Device Tree Binding**: `stepper-driver.yaml`
+**Device Tree Binding**: `dts/bindings/stepper/stepper-driver.yaml`
 ```yaml
-stepper_left: stepper-left {
-    compatible = "stepper-driver";
-    step-gpio = <&gpio0 12 GPIO_ACTIVE_HIGH>;
-    direction-gpio = <&gpio0 13 GPIO_ACTIVE_HIGH>;
-    enable-gpio = <&gpio0 14 GPIO_ACTIVE_LOW>;
-    steps-per-revolution = <200>;
-    microsteps = <16>;
+stepper_left: stepper_left {
+    compatible = "doodle,a4988-stepper";
+    micro-step-res = <16>;
+    step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* ESP32: GPIO5, nRF52: P0.02 */
+    dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* ESP32: GPIO6, nRF52: P0.03 */
+    en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* ESP32: GPIO7, nRF52: P0.04 */
+    label = "LEFT_STEPPER";
 };
 ```
 
 **Hardware Interface**:
 - **STEP**: GPIO pulse train at calculated frequency
-- **DIR**: GPIO level for rotation direction
-- **EN**: GPIO level for driver enable/disable
+- **DIR**: GPIO level for rotation direction (HIGH = clockwise)
+- **EN**: GPIO level for driver enable/disable (Active LOW)
+
+**A4988/DRV8825 Driver Connections**:
+```
+ESP32-S3/nRF52840 → A4988/DRV8825 Driver
+STEP pin          → STEP
+DIR pin           → DIR
+EN pin            → EN (Enable)
+3.3V              → VDD (logic power)
+3.3V              → RESET (tie high)
+3.3V              → SLEEP (tie high)
+3.3V              → MS1, MS2, MS3 (for 16x microstepping)
+GND               → GND
+                    VMOT ← 12V Motor Power Supply
+                    1A, 1B, 2A, 2B → Stepper Motor Phases
+```
 
 **Real-time Operation**:
 - Designed for 50 Hz velocity updates from control thread
@@ -163,7 +178,7 @@ FUNCTION stepper_disable(motor):
 | 180 deg/s | 1600 steps/s | 312.5 μs | 0.5 rev/s |
 | 90 deg/s | 800 steps/s | 625 μs | 0.25 rev/s |
 
-### Servo Motor Driver (`servo/`)
+### Servo Motor Driver (`servo/servo.c`)
 
 **Purpose**: Controls servo motors for drawing tool positioning
 
@@ -191,7 +206,7 @@ FUNCTION servo_set_angle(servo, angle_degrees):
     servo_state[servo].current_angle = angle_degrees
 ```
 
-### LED Driver (`led/`)
+### LED Driver (`led/led_gpio.c`)
 
 **Purpose**: Provides visual status indication and user feedback
 
@@ -269,20 +284,100 @@ FUNCTION buzzer_off():
 
 ## Testing
 
-Each driver includes comprehensive tests in the `tests/` directory:
+Each driver includes comprehensive tests in the `../tests/` directory (relative to drivers/):
 
-- **`tests/stepper/`**: Revolution tests and velocity validation
-- **`tests/servo/`**: Angle positioning tests  
-- **`tests/led/`**: LED pattern and timing tests
-- **`tests/buzzer/`**: Audio pattern tests
-
-Run tests with:
-```bash
-just test-stepper
-just test-servo  
-just test-led
-just test-buzzer
+### Stepper Motor Tests (`../tests/stepper/stepper_control.cpp`)
+**Purpose**: Validates stepper motor velocity control and direction changes
+**Test Pattern**:
+```cpp
+// Continuous test cycle:
+1. Forward rotation: 360°/s (1 revolution/second) for 2 seconds
+2. Stop for 1 second  
+3. Reverse rotation: -180°/s (0.5 revolution/second) for 2 seconds
+4. Stop for 2 seconds and repeat
 ```
+**Expected Behavior**: Left stepper motor should make 2 full forward rotations, pause, then 1 reverse rotation, creating a distinctive back-and-forth pattern
+**Hardware Validation**: Visually confirm motor rotation direction and speed match the programmed values
+
+### Servo Motor Tests (`../tests/servo/servo_control.cpp`)
+**Purpose**: Tests dual servo positioning for eraser and marker control
+**Test Pattern**:
+```cpp
+// Synchronized servo movement with offset pattern:
+Eraser positions: 0° → 90° → 180° → 90° → repeat
+Marker positions: 180° → 90° → 0° → 90° → repeat (offset by 2 steps)
+```
+**Expected Output**:
+```
+Dual Servo Demo - Eraser: servo_eraser, Marker: servo_marker
+Eraser: 0°, Marker: 180°
+Eraser: 90°, Marker: 90° 
+Eraser: 180°, Marker: 0°
+Eraser: 90°, Marker: 90°
+```
+**Hardware Validation**: Both servo horns should move in coordinated but offset patterns
+
+### LED Driver Tests (`../tests/led/led_control.cpp`)
+**Purpose**: Tests LED abstraction layer and GPIO control
+**Test Pattern**:
+```cpp
+// Simple ON/OFF toggle with driver abstraction:
+500ms ON → 500ms OFF → repeat
+Uses led_command_t enum (LED_ON/LED_OFF) sent to led_driver_set()
+```
+**Expected Output**:
+```
+LED Driver Test starting...
+LED device initialized successfully
+GPIO11 LED driver ready
+Testing both ACTIVE_HIGH and ACTIVE_LOW configurations...
+LED ON
+LED ON
+LED ON
+...
+```
+**Hardware Validation**: Status LED should blink at 1Hz (500ms on, 500ms off)
+
+### Buzzer Driver Tests (`../tests/buzzer/buzzer_test.cpp`)
+**Purpose**: Tests buzzer GPIO control and audio feedback
+**Test Pattern**:
+```cpp
+// Simple buzzer toggle:
+500ms ON → 500ms OFF → repeat
+Uses buzzer_toggle() function for state changes
+```
+**Expected Output**:
+```
+Buzzer Driver Test - 20ms Toggle
+Buzzer initialized successfully - starting toggle test
+```
+**Hardware Validation**: Should hear intermittent buzzer sound at 1Hz
+
+**Run tests with justfile commands**:
+```bash
+# Stepper motor tests
+just test-nrf-stepper    # nRF52840DK: Pins P0.02, P0.03, P0.04
+just test-esp-stepper    # ESP32-S3: Pins GPIO5, GPIO6, GPIO7
+
+# Servo motor tests  
+just test-nrf-servo      # nRF52840DK: PWM pins P0.13, P0.03
+just test-esp-servo      # ESP32-S3: PWM pins GPIO2, GPIO3
+
+# LED tests
+just test-nrf-led        # nRF52840DK: GPIO P0.14
+just test-esp-led        # ESP32-S3: GPIO11
+
+# Buzzer tests
+just test-nrf-buzzer     # nRF52840DK: GPIO P0.15
+just test-esp-buzzer     # ESP32-S3: GPIO12
+```
+
+**Test Build System Integration**:
+Tests are integrated into the CMake build system via `CONFIG_*_TEST` flags:
+- `CONFIG_STEPPER_TEST=y` → Builds `stepper_control.cpp` + `stepper.c`
+- `CONFIG_SERVO_TEST=y` → Builds `servo_control.cpp` + `servo.c`
+- `CONFIG_LED_TEST=y` → Builds `led_control.cpp` + `led_gpio.c`
+- `CONFIG_BUZZER_TEST=y` → Builds `buzzer_test.cpp` + `buzzer.c`
 
 ## Hardware Configuration
 
@@ -291,9 +386,29 @@ just test-buzzer
 - **Secondary**: Nordic nRF52840 DK
 
 ### Pin Assignments
-See device tree overlay files:
-- `app/boards/esp32s3_devkitc.overlay`
-- `app/boards/nucleo_f302r8.overlay`
+See device tree overlay files for complete pin mappings:
+- `app/boards/esp32s3_devkitc_procpu.overlay` (ESP32-S3 DevKitC)
+- `app/boards/nrf52840dk_nrf52840.overlay` (Nordic nRF52840 DK)
+
+**ESP32-S3 DevKitC Pinout**:
+```
+Left Stepper:  GPIO5 (STEP), GPIO6 (DIR), GPIO7 (EN)
+Right Stepper: GPIO8 (STEP), GPIO9 (DIR), GPIO10 (EN) [disabled]
+Servo Eraser:  GPIO2 (PWM)
+Servo Marker:  GPIO3 (PWM)
+Status LED:    GPIO11
+Buzzer:        GPIO12
+```
+
+**nRF52840 DK Pinout**:
+```
+Left Stepper:  P0.02 (STEP), P0.03 (DIR), P0.04 (EN)
+Right Stepper: P0.05 (STEP), P0.06 (DIR), P0.07 (EN)
+Servo Eraser:  P0.13 (PWM)
+Servo Marker:  P0.03 (PWM) [shared with stepper DIR]
+Status LED:    P0.14
+Buzzer:        P0.15
+```
 
 ## Development Notes
 
@@ -308,8 +423,11 @@ See device tree overlay files:
 - Logging integration for debugging and monitoring
 
 ### Future Enhancements
-- Acceleration/deceleration profiles for stepper motors
-- Closed-loop position feedback
-- Dynamic microstepping adjustment
-- Power management features
+- **Stepper Improvements**: Acceleration/deceleration profiles for smoother motion
+- **Position Feedback**: Closed-loop position control with encoders
+- **Dynamic Microstepping**: Adaptive microstepping based on speed requirements
+- **Power Management**: Sleep modes and current reduction during idle
+- **Dual Motor Coordination**: Synchronized control for differential drive
+- **Safety Features**: Thermal protection and stall detection
+- **Integration**: Integrate with Core Firmware
 

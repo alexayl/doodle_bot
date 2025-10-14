@@ -6,37 +6,33 @@
         label = "SERVO_ERASER";
     };
 
-    /* Servo motor for marker control - P0.12 PWM */
+    /* Servo motor for marker control - P0.03 PWM */
     servo_marker: servo_marker {
         compatible = "doodle-servo";
-        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.12 */
+        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.03 */
         label = "SERVO_MARKER";
     };
 
     /* Left stepper motor via A4988 driver */
     stepper_left: stepper_left {
-        compatible = "stepper-driver";
-        step-gpio = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
-        direction-gpio = <&gpio0 3 GPIO_ACTIVE_HIGH>; /* P0.03 - Direction control */
-        enable-gpio = <&gpio0 4 GPIO_ACTIVE_LOW>;     /* P0.04 - Enable/disable */
+        status = "okay";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
+        dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;       /* P0.03 - Direction control */
+        en-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;         /* P0.04 - Enable/disable */
         label = "LEFT_STEPPER";
-        steps-per-revolution = <200>;
-        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
-        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
-        acceleration = <1000>;        /* Steps/sec² */
     };
 
     /* Right stepper motor via A4988 driver */
     stepper_right: stepper_right {
-        compatible = "stepper-driver";
-        step-gpio = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
-        direction-gpio = <&gpio0 6 GPIO_ACTIVE_HIGH>; /* P0.06 - Direction control */
-        enable-gpio = <&gpio0 7 GPIO_ACTIVE_LOW>;     /* P0.07 - Enable/disable */
+        status = "okay";
+        compatible = "doodle,a4988-stepper";
+        micro-step-res = <16>;
+        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
+        dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* P0.06 - Direction control */
+        en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* P0.07 - Enable/disable */
         label = "RIGHT_STEPPER";
-        steps-per-revolution = <200>;
-        microsteps = <16>;            /* Fixed 1/16 microstepping (hardwired) */
-        max-speed = <3200>;           /* Max steps/sec (with microstepping) */
-        acceleration = <1000>;        /* Steps/sec² */
     };
 
     /* GPIO LED configuration */
@@ -77,14 +73,14 @@
     pwm0_default: pwm0_default {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 12)>;  /* P0.12 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 3)>;   /* P0.03 - Servo Marker PWM */
         };
     };
 
     pwm0_sleep: pwm0_sleep {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 12)>;  /* P0.12 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 3)>;   /* P0.03 - Servo Marker PWM */
             low-power-enable;
         };
     };
