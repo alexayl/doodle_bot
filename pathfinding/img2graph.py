@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import os
+import time
 from skimage.feature import canny
 
 def save_image(fig, img_name, directory, extension=".png"):
@@ -79,7 +80,7 @@ def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug
     return img
 
 # 1000, 1460
-def scale_to_canvas(img, img_name_ext, canvas_size=(500, 500), padding_percentage=0.05, debug=False, save=False):
+def scale_to_canvas(img, img_name_ext, canvas_size=(1150, 1460), padding_percentage=0.05, debug=False, save=False):
     """
     Scale an image to fit within a specified canvas size while maintaining 
     aspect ratio.
@@ -492,7 +493,7 @@ def node_map(img, img_name_ext, debug=False, save=False):
         
     return graph, endpoints
 
-def img2graph(img_name, canvas_size=(1000, 1460), debug=[False, False, False, False],
+def img2graph(img_name, canvas_size=(1150, 1460), debug=[False, False, False, False],
               save=[False, False, False, False]):
     """
         Convert an image to a graph by processing it through several steps:
@@ -522,17 +523,18 @@ if __name__ == "__main__":
     parser.add_argument("img_name", help="image name in pathfinding png/")
     parser.add_argument("--debug", action="store_true", help="display debug information")
     parser.add_argument("--save", action="store_true", help="save debug information")
+    parser.add_argument("--time", action="store_true", help="time the execution")
     args = parser.parse_args()
 
     img_name = args.img_name
 
-    canvas_size = (1000, 1460)
+    canvas_size = (575, 730)
 
     debug_all = args.debug
     display_array = [False,   # load_image
                      False,   # scale_to_canvas
                      False,   # edge_map
-                     True     # node_map
+                     False     # node_map
     ]
 
     save_all = args.save
@@ -554,4 +556,9 @@ if __name__ == "__main__":
                 img_name = file[:-4]
                 img2graph(img_name, canvas_size, display_array, save_array)
     else:
+        if args.time:
+            start_time = time.time()
         img2graph(img_name, canvas_size, display_array, save_array)
+        if args.time:
+            end_time = time.time()
+            print(f"Execution time: {end_time - start_time:.2f} seconds")

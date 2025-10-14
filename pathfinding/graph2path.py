@@ -1,8 +1,9 @@
 import argparse
-from img2graph import img2graph
+from img2graph import img2graph, save_image
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 
 def get_distance(node1, node2, graph):
     """Return 0 if nodes share the same componentID, else Euclidean distance."""
@@ -10,7 +11,7 @@ def get_distance(node1, node2, graph):
         return 0
     return np.linalg.norm(np.array(node1) - np.array(node2))
 
-def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1000, 1460)):
+def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 1460), debug=False, save=False):
 
     # Add a starting node at the top left corner
     starting_node = (int(canvas_size[0] * starting_node_inset_p), \
@@ -40,7 +41,7 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1000, 
         current = next_node
     path.append(start)
     endpoints = path
-    print("Nearest neighbor path built with length:", len(path))
+    print("Nearest neighbor path found successfully")
 
     # Add edges along the path
     # for i in range(len(endpoints) - 1):
@@ -50,7 +51,7 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1000, 
     #         continue
     #     graph.add_edge(node1, node2, weight=distance, color='red')
 
-    print("Edges added for nearest neighbor path. Ready for 2-opt optimization...")
+    # print("Edges added for nearest neighbor path. Ready for 2-opt optimization...")
 
     def calc_total_distance(path, graph):
         total = 0
@@ -80,10 +81,10 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1000, 
             print(f"Iteration {iteration}: current best distance = {best_distance:.2f}")
         return best
 
-    print("Running 2-opt optimization...")
-    optimized_path = two_opt(endpoints, graph)
+    # print("Running 2-opt optimization...")
+    # optimized_path = two_opt(endpoints, graph)
 
-    print(optimized_path)
+    optimized_path = endpoints
 
     # Draw optimized path
     path_edges = [(optimized_path[i], optimized_path[i + 1]) for i in range(len(optimized_path) - 1)]
@@ -94,36 +95,45 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1000, 
         distance = get_distance(node1, node2, graph)
         graph.add_edge(node1, node2, weight=distance, color='red')
 
-    print("Optimized path visualized.")
-    
-    #     same_component = graph.nodes[node1]['componentID'] == graph.nodes[node2]['componentID']
-    #     if same_component:
-    #         graph.add_edge(node1, node2, weight=0)
-    #         graph.edges[(node1, node2)]['color'] = 'red'
-    #         continue
-    #     distance = np.linalg.norm(np.array(node1) - np.array(node2))
-    #     graph.add_edge(node1, node2, weight=distance)
-    #     graph.edges[(node1, node2)]['color'] = 'black'
-    # last_node = endpoints[-1]
-    # distance = np.linalg.norm(np.array(starting_node) - np.array(last_node))
-    # graph.add_edge(starting_node, last_node, weight=distance)
-    # graph.edges[(starting_node, last_node)]['color'] = 'black'
+    if debug or save:
+        cols, rows = canvas_size
+        aspect_ratio = cols / rows
+        fig, ax = plt.subplots(figsize=(5 * aspect_ratio, 5))
+        pos = {node: node for node in graph.nodes()}
+        nx.draw(graph, pos, 
+                node_size=5,
+                node_color=[graph.nodes[node].get('color', 'black') for node in graph.nodes()], 
+                edge_color=[graph.edges[edge].get('color', 'black') for edge in graph.edges()],
+                ax=ax)
+        ax.set_aspect('equal')
+        ax.set_xlim(0, cols)
+        ax.set_ylim(0, rows)
+        ax.axis('on')
+        if debug:
+            plt.show()
+        if save:
+            save_image(fig, "path_" + img_name, "outputs/path/", extension=".png")
+        plt.close(fig)
 
-    cols, rows = canvas_size
-    aspect_ratio = cols / rows
-    fig, ax = plt.subplots(figsize=(5 * aspect_ratio, 5))
-    pos = {node: node for node in graph.nodes()}
-    nx.draw(graph, pos, 
-            node_size=5,
-            node_color=[graph.nodes[node].get('color', 'black') for node in graph.nodes()], 
-            edge_color=[graph.edges[edge].get('color', 'black') for edge in graph.edges()],
-            ax=ax)
-    ax.set_aspect('equal')
-    ax.set_xlim(0, cols)
-    ax.set_ylim(0, rows)
-    ax.axis('on')
-    plt.show()
-    plt.close(fig)
+    segments = [[optimized_path[0]]]
+    for i in range(1, len(optimized_path) - 1, 2):
+        starting_endpoint = optimized_path[i]
+        ending_endpoint = optimized_path[i+1]
+        segment = [starting_endpoint]
+        while(segment[-1] != ending_endpoint):
+            neighbors = list(graph.neighbors(segment[-1]))
+            if len(neighbors) > 2:
+                print("ERROR TOO MANY NEIGHBORS")
+                break
+            if neighbors[0] in segment:
+                next_node = neighbors[1]
+            else:
+                next_node = neighbors[0]
+            segment.append(next_node)
+        segments.append(segment)
+    segments.append([optimized_path[-1]])
+
+    return segments
 
 if __name__ == "__main__":
 
@@ -131,7 +141,10 @@ if __name__ == "__main__":
     parser.add_argument("img_name", help="image name in pathfinding png/")
     parser.add_argument("--debug", action="store_true", help="display debug information")
     parser.add_argument("--save", action="store_true", help="save debug information")
+    parser.add_argument("--time", action="store_true", help="time the execution")
     args = parser.parse_args()
+
+    img_name = args.img_name
 
     debug_all = args.debug
     debug_array = []
@@ -139,7 +152,7 @@ if __name__ == "__main__":
     save_all = args.save
     save_array = []
 
-    canvas_size = (500, 730)
+    canvas_size = (575, 730)
     
     if debug_all == True:
         display_array = [True]
@@ -147,6 +160,12 @@ if __name__ == "__main__":
     if save_all == True:
         save_array = [True]
 
-    graph, endpoints = img2graph(args.img_name, canvas_size=canvas_size, debug=[False, False, False, False], 
+    graph, endpoints = img2graph(img_name, canvas_size=canvas_size, debug=[False, False, False, False], 
                       save=[False, False, False, False])
-    path = graph2path(graph, endpoints, canvas_size=canvas_size)
+    
+    if args.time:
+        start_time = time.time()
+    path = graph2path(graph, endpoints, canvas_size=canvas_size, debug=debug_all, save=save_all)
+    if args.time:
+        end_time = time.time()
+        print(f"graph2path executed in {end_time - start_time:.2f} seconds")
