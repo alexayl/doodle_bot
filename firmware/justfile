@@ -216,6 +216,18 @@ test-esp-stepper: _verify_workspace clean
   west flash --build-dir build
   python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
 
+# Run comprehensive peripheral demo showing all components
+demo-esp: _verify_workspace clean
+  west build \
+    -p always \
+    -b "{{ESP_BOARD}}" \
+    -d build \
+    app \
+    {{CMAKE_CACHE_ARGS}} \
+    -DCONFIG_PERIPHERAL_DEMO=y
+  west flash --build-dir build
+  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+
 
 # ------------------
 #  Defaults

@@ -18,7 +18,17 @@ config SERVO_TEST
 	select SERVO
 	help
 	  When enabled, builds the servo test application instead of the main
-	  doodle bot application. This allows testing the servo driver in isolation.
+	  application.
+
+config PERIPHERAL_DEMO
+	bool "Build peripheral demo instead of main application"
+	select SERVO
+	select STEPPER_DRIVER
+	select PWM_BUZZER
+	help
+	  When enabled, builds the comprehensive peripheral demo showing
+	  all robot components: servos, stepper motor, PWM buzzer, and LED.
+	  Uses simple GPIO LED driver for reliable operation.
 
 config SERVO_PWM_TEST
 	bool "Build PWM test for servo pin debugging"

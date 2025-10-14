@@ -7,7 +7,8 @@
         "app_version.h": "c",
         "printk.h": "c",
         "stdio.h": "c",
-        "iosfwd": "cpp"
+        "iosfwd": "cpp",
+        "*.s": "cpp"
     },
     "idf.portWin": "COM7",
 }
