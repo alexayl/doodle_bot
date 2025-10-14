@@ -11,6 +11,8 @@ from app.camera import ThreadedCamera, CameraConfig
 from app.bt_link import BTLink
 from app.path_parse import load_gcode_file
 from app.utils import encode_jpeg, Metrics
+import sys, shutil
+from pathlib import Path
 
 USE_TURBOJPEG = True  # encode_jpeg handles fallback
 CAMERA_SRC = int(os.getenv("CAMERA_SRC", "0"))
@@ -257,7 +259,11 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
 
     Returns an empty list if the file is missing or can’t be parsed.
     """
-    bases = [os.path.join(PATHFINDING_DIR, f"{name}.gcode")]
+    bases = [
+    os.path.join(PATHFINDING_DIR, f"{name}.gcode"),
+    os.path.join(PATHFINDING_DIR, "gcode", f"{name}.gcode"),
+]
+
     ops: List[tuple] = []
     for p in bases:
         if os.path.isfile(p):
@@ -292,6 +298,45 @@ def _emit_gcode(ops: List[tuple]) -> str:
         lines.append("M5")
     lines.append("G90")  # back to absolute
     return "\n".join(lines) + "\n"
+def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(575, 730)) -> str:
+    # Make pathfinding modules importable
+    if PATHFINDING_DIR not in sys.path:
+        sys.path.insert(0, PATHFINDING_DIR)
+
+    from img2graph import img2graph
+    from graph2path import graph2path
+    from path2gcode import path2gcode
+
+    img_path = os.path.abspath(img_path)
+    out_gcode_path = os.path.abspath(out_gcode_path)
+
+    # Ensure expected directories exist under pathfinding/
+    png_dir = os.path.join(PATHFINDING_DIR, "png")
+    os.makedirs(png_dir, exist_ok=True)
+
+    name = Path(img_path).stem
+    canonical_png = os.path.join(png_dir, f"{name}.png")
+
+    # Normalize to PNG in pathfinding/png/ so img2graph(name) can find it
+    ext = Path(img_path).suffix.lower()
+    if ext == ".png":
+        if os.path.abspath(img_path) != os.path.abspath(canonical_png):
+            shutil.copyfile(img_path, canonical_png)
+    else:
+        im = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        if im is None:
+            raise RuntimeError(f"Uploaded image could not be read: {img_path}")
+        cv2.imwrite(canonical_png, im)
+
+    # Some of the pathfinding code expects relative paths (png/<name>.png)
+    # so run the whole pipeline with CWD=PATHFINDING_DIR.
+    with _in_dir(PATHFINDING_DIR):
+        graph, endpoints = img2graph(name, canvas_size=canvas_size)
+        path = graph2path(graph, endpoints, canvas_size=canvas_size)
+        os.makedirs(os.path.dirname(out_gcode_path), exist_ok=True)
+        path2gcode(path, filename=out_gcode_path)
+
+    return out_gcode_path
 
 @app.route("/")
 def home():
@@ -326,7 +371,7 @@ def erase():
             else:
                 RUN.load(fitted)
                 RUN.start()
-                msg = f"Erase queued with {len(fitted)} vertices (firmware will smooth)."
+                msg = f"Erase queued with {len(fitted)} vertices."
         return render_template("index.html", page="erase", msg=msg, error=error)
 
     return render_template("index.html", page="erase", msg=msg, error=error)
@@ -357,14 +402,16 @@ def draw():
             uploaded_file.save(img_path)
             STATE["target_image"] = fname
 
-            # need to finalize integrate pathfinding (image -> G-code)
-            out_gcode = os.path.join("uploads", os.path.splitext(fname)[0] + ".gcode")
             try:
-                ops = load_gcode_file(out_gcode)
+                base = os.path.splitext(fname)[0]
+                out_gcode = os.path.join("uploads", f"{base}.gcode")
+                gcode_path = _convert_image_to_gcode(img_path, out_gcode, canvas_size=(575, 730))
+                ops = load_gcode_file(gcode_path)
                 raw_norm = _ops_to_normalized_wps(ops)
-            except Exception:
+            except Exception as e:
                 raw_norm = []
-                error = error or "Could not convert the uploaded image to a path."
+                error = f"Image conversion failed: {e}"
+
 
         if not raw_norm:
             fallback = _load_named_gcode_normalized("draw")
@@ -379,7 +426,7 @@ def draw():
             else:
                 RUN.load(fitted)
                 RUN.start()
-                msg = f"Draw queued with {len(fitted)} vertices (firmware will smooth)."
+                msg = f"Draw queued with {len(fitted)} vertices."
 
         return render_template(
             "index.html",
