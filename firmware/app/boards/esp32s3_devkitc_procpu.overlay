@@ -98,7 +98,7 @@
 
     channel2@2 {
         reg = <0x2>;
-        timer = <0>;
+        timer = <1>;
     };
 };
 
