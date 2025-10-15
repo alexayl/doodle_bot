@@ -128,7 +128,7 @@
 
     channel3@3 {
         reg = <0x3>;
-        timer = <1>;
+        timer = <2>;
     };
 };
 

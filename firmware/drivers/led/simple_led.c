@@ -97,10 +97,10 @@ bool simple_led_is_ready(void)
 }
 
 /**
- * LED Driver Function - receives ON/OFF commands from core firmware
+ * LED Driver Function - receives 1/0 commands from core firmware
  * Compatible with led_control test expectations
  */
-int led_driver_set(led_command_t command)
+int led_driver_set(int state)
 {
     int ret;
     
@@ -108,14 +108,18 @@ int led_driver_set(led_command_t command)
         return -ENODEV;
     }
     
-    if (command == LED_ON) {
+    if (state == 1) {
         ret = simple_led_on();
-        /* Only print when LED is turned ON, matching led_control test behavior */
+        /* Print 1 when LED is turned ON */
         if (ret == 0) {
-            printk("LED ON\n");
+            printk("1\n");
         }
     } else {
         ret = simple_led_off();
+        /* Print 0 when LED is turned OFF */
+        if (ret == 0) {
+            printk("0\n");
+        }
     }
     
     return ret;

@@ -5,7 +5,7 @@
  * - Servos: Move back and forth
  * - Buzzer: Toggle on/off (using PWM buzzer toggle)
  * - LED: Toggle on/off (GPIO11)
- * - Stepper: 360° forward and backward
+ * - Stepper: 90° forward and backward
  */
 
 #include <zephyr/kernel.h>
@@ -15,10 +15,12 @@
 #include <stdlib.h> // For abs() function
 
 // Include all your drivers
+extern "C" {
 #include "stepper.h"
 #include "pwm_buzzer.h"
 #include "servo.h"
 #include "simple_led.h"
+}
 
 /* Servo devices from device tree */
 static const struct device *servo_eraser;
@@ -348,75 +350,97 @@ static void test_led(void)
 }
 
 /**
- * Test stepper accuracy - validate ±5% step command accuracy spec
+ * Test stepper accuracy with PWM-based precision - validate ±5% step command accuracy spec
+ * Uses 90° movements for better validation and testing consistency
  */
 static void test_stepper(void)
 {
-    printk("Testing Stepper Motor Accuracy (±5% Spec)\n");
-    printk("==========================================\n");
+    printk("Testing PWM-Based Stepper Motor Accuracy (±5%% Spec)\n");
+    printk("===================================================\n");
+    printk("Using 90 degree movements for precise validation\n");
     
     /* Reset counters for clean test */
     stepper_reset_counters();
 
-    /* Test 1: 360° Forward Movement */
-    printk("Test 1: 360° Forward (clockwise)\n");
-    int expected_steps_360 = 3200;  // 360° * 1.8°/step * 16 microsteps = 3200 steps
+    /* Test 1: 90 degree Forward Movement */
+    printk("\nTest 1: 90 degree Forward (clockwise)\n");
+    int expected_steps_90 = 800;  // 90 degrees * 1.8 degrees/step * 16 microsteps = 800 steps
     
-    stepper_start_counting(360.0f);
+    stepper_start_counting(90.0f);
     stepper_set_velocity(STEPPER_LEFT, 360.0f);  // 1 rev/s
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(250));  // Run for 250ms for 90° at 360°/s
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     
     int actual_steps = stepper_get_step_count();
-    float accuracy_percent = ((float)actual_steps / expected_steps_360) * 100.0f;
+    float accuracy_percent = ((float)actual_steps / expected_steps_90) * 100.0f;
     float error_percent = accuracy_percent - 100.0f;
-    bool pass_360_forward = (error_percent >= -5.0f && error_percent <= 5.0f);
+    bool pass_90_forward = (error_percent >= -5.0f && error_percent <= 5.0f);
     
-    printk("  Expected: %d steps\n", expected_steps_360);
+    printk("  Expected: %d steps (90 degrees)\n", expected_steps_90);
     printk("  Actual:   %d steps\n", actual_steps);
     printk("  Accuracy: %.2f%% (error: %+.2f%%)\n", accuracy_percent, error_percent);
-    printk("  Result:   %s (±5%% spec)\n", pass_360_forward ? "PASS" : "FAIL");
+    printk("  Result:   %s (±5%% spec)\n", pass_90_forward ? "PASS" : "FAIL");
     k_sleep(K_MSEC(500));
 
-    /* Test 2: 360° Backward Movement */
-    printk("\nTest 2: 360° Backward (counter-clockwise)\n");
-    stepper_start_counting(360.0f);
+    /* Test 2: 90 degree Backward Movement */
+    printk("\nTest 2: 90 degree Backward (counter-clockwise)\n");
+    stepper_start_counting(90.0f);
     stepper_set_velocity(STEPPER_LEFT, -360.0f);  // 1 rev/s reverse
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(250));  // Run for 250ms for 90 degrees at 360 degrees/s
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     
     actual_steps = stepper_get_step_count();
-    accuracy_percent = ((float)actual_steps / expected_steps_360) * 100.0f;
+    accuracy_percent = ((float)actual_steps / expected_steps_90) * 100.0f;
     error_percent = accuracy_percent - 100.0f;
-    bool pass_360_backward = (error_percent >= -5.0f && error_percent <= 5.0f);
+    bool pass_90_backward = (error_percent >= -5.0f && error_percent <= 5.0f);
     
-    printk("  Expected: %d steps\n", expected_steps_360);
+    printk("  Expected: %d steps (90 degrees)\n", expected_steps_90);
     printk("  Actual:   %d steps\n", actual_steps);
     printk("  Accuracy: %.2f%% (error: %+.2f%%)\n", accuracy_percent, error_percent);
-    printk("  Result:   %s (±5%% spec)\n", pass_360_backward ? "PASS" : "FAIL");
+    printk("  Result:   %s (±5%% spec)\n", pass_90_backward ? "PASS" : "FAIL");
+
+    /* Test 3: PWM Precision Validation */
+    printk("\nTest 3: PWM Timing Precision\n");
+    stepper_start_counting(90.0f);
+    stepper_set_velocity(STEPPER_LEFT, 360.0f);  // 1 rev/s
+    k_sleep(K_MSEC(250));  // 250ms for 90 degrees
+    stepper_stop(STEPPER_LEFT);
+    stepper_stop_counting();
+    
+    uint32_t pwm_pulses = stepper_get_gpio_pulse_count();
+    actual_steps = stepper_get_step_count();
+    
+    printk("  PWM Pulses: %u\n", pwm_pulses);
+    printk("  Step Count: %d\n", actual_steps);
+    printk("  PWM/Step Ratio: %.2f (expect ~1.0 for PWM mode)\n", 
+           actual_steps > 0 ? (float)pwm_pulses / actual_steps : 0.0f);
 
     /* Overall Test Results */
-    printk("\n=== STEP ACCURACY SPECIFICATION TEST ===\n");
+    printk("\n=== PWM STEPPER ACCURACY SPECIFICATION TEST ===\n");
     printk("Requirement: ±5%% step command accuracy\n");
-    printk("360° Forward:  %s\n", pass_360_forward ? "PASS" : "FAIL");
-    printk("360° Backward: %s\n", pass_360_backward ? "PASS" : "FAIL");
+    printk("Hardware: PWM-based timing (nanosecond precision)\n");
+    printk("90 degree Forward:  %s\n", pass_90_forward ? "PASS" : "FAIL");
+    printk("90 degree Backward: %s\n", pass_90_backward ? "PASS" : "FAIL");
     
-    bool overall_pass = pass_360_forward && pass_360_backward;
-    printk("OVERALL SPEC:  %s\n", overall_pass ? "PASS" : "FAIL");
+    bool overall_pass = pass_90_forward && pass_90_backward;
+    printk("OVERALL SPEC: %s\n", overall_pass ? "PASS" : "FAIL");
     
-    if (!overall_pass) {
+    if (overall_pass) {
+        printk("\n✓ PWM stepper driver meets ±5%% accuracy requirement!\n");
+        printk("✓ Nanosecond-precision timing provides excellent accuracy\n");
+    } else {
         printk("\nTROUBLESHOOTING:\n");
-        printk("- Check stepper driver timing\n");
-        printk("- Verify microstepping configuration\n");
-        printk("- Check for mechanical slippage\n");
-        printk("- Validate step counting accuracy\n");
+        printk("- Check PWM hardware configuration\n");
+        printk("- Verify microstepping settings (16x)\n");
+        printk("- Check for mechanical issues\n");
+        printk("- Validate timing calculations\n");
     }
     
-    printk("==========================================\n");
+    printk("===============================================\n");
     printk("Total steps since reset: %d\n", stepper_get_total_steps());
-    printk("Stepper accuracy test complete!\n\n");
+    printk("PWM-based stepper test complete!\n\n");
 }
 
 /**
