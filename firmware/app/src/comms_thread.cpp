@@ -34,11 +34,9 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
     printk("Handler: Processing G-code %c%d\n", cmd.code, cmd.number);
 
     // Queue parsed instruction for navigation
-    while (k_msgq_put(q, &cmd, K_NO_WAIT) != 0) {
-            /* message queue is full: purge old data & try again */
-            k_msgq_purge(q);
-        }
-    
+    if (k_msgq_put(q, &cmd, K_NO_WAIT) != 0) {
+        printk("Queue full, dropping message\n");
+    }
 
 }
 

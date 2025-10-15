@@ -29,6 +29,7 @@ public:
     enum Instruction : uint8_t {
         G91 = 0,    // relative positioning
         G0,         // rapid move
+        G1,         // idk what tom is using
         M280        // move servos
     };
 
