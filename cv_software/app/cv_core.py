@@ -18,9 +18,10 @@ BOT_MARKERS = (10, 11)
 
 BOT_BASELINE_MM = 60.0
 # testing on a board of this dims
-KNOWN_BOARD_WIDTH_MM = 1000.0
-KNOWN_BOARD_HEIGHT_MM = 1460.0
-
+# KNOWN_BOARD_WIDTH_MM = 1150.0
+# KNOWN_BOARD_HEIGHT_MM = 1460.0
+KNOWN_BOARD_HEIGHT_MM = 350.0
+KNOWN_BOARD_WIDTH_MM = 400
 @dataclass
 class CameraModel:
     """Optional camera intrinsics/distortion used to undistort frames before detection."""
@@ -122,10 +123,11 @@ class BoardCalibrator:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
         id_map = self.det.detect(gray)
+        # print("Detected markers:", list(id_map.keys()))
         cs = self._collect_corners(id_map)
+
         if len(cs) < 3:
             return self.board_pose
-
         cs = self._complete_quad(cs)
         if not all(k in cs for k in ("TL", "TR", "BR", "BL")):
             return self.board_pose
@@ -135,8 +137,12 @@ class BoardCalibrator:
 
         width_px  = max(float(np.linalg.norm(tr - tl)), 1e-6)
         height_px = max(float(np.linalg.norm(bl - tl)), 1e-6)
+        # board_rect = np.array(
+        #     [[0.0, 0.0], [width_px, 0.0], [width_px, height_px], [0.0, height_px]],
+        #     dtype=np.float32
+        # )
         board_rect = np.array(
-            [[0.0, 0.0], [width_px, 0.0], [width_px, height_px], [0.0, height_px]],
+            [[0.0, height_px], [width_px, height_px], [width_px, 0.0], [0.0, 0.0]],
             dtype=np.float32
         )
 
@@ -284,12 +290,15 @@ class CVPipeline:
         return True
 
     def process_frame(self, frame_bgr) -> tuple[bool, float]:
-        """One-shot update: ensure calibration, update bot, and return (valid_pose, latency_s)."""
         t0 = time.monotonic()
         st = self.get_state()
         needs_cal = not st["calibrated"] or st["mm_per_px"] is None
         if needs_cal or (st["board_confidence"] is not None and st["board_confidence"] < _CONF_MIN_BOARD):
             self.calibrate_board(frame_bgr)
+
+        if self.cal.board_pose is not None and self.cal.board_pose.mm_per_px is None:
+            self.scale.from_board_size()
+
         _ = self.update_bot(frame_bgr)
         st = self.get_state()
         valid = bool(

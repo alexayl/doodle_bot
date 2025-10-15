@@ -9,52 +9,32 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
-#include <zephyr/drivers/led.h>
+#include <simple_led.h>
 
 /* LED device and configuration */
-#define LED_NODE DT_NODELABEL(led1)
-#define LED_DEVICE DEVICE_DT_GET(DT_PARENT(LED_NODE))
-#define LED_NUM DT_NODE_CHILD_IDX(LED_NODE)
+/* Using simple LED driver instead of Zephyr LED subsystem */
 
 /**
  * LED Driver Abstraction Layer
  * Core firmware tells driver "ON" or "OFF"
+ * The led_command_t enum and led_driver_set function 
+ * are provided by simple_led.h
  */
-typedef enum {
-    LED_OFF = 0,
-    LED_ON = 1
-} led_command_t;
-
-/**
- * LED Driver Function - receives ON/OFF commands from core firmware
- */
-int led_driver_set(led_command_t command)
-{
-    uint8_t brightness = (command == LED_ON) ? 1 : 0;
-    int ret = led_set_brightness(LED_DEVICE, LED_NUM, brightness);
-    
-    /* Only print when LED is turned ON */
-    if (command == LED_ON && ret == 0) {
-        printk("LED ON\n");
-    }
-    
-    return ret;
-}
 
 int main(void)
 {
     printk("LED Driver Test starting...\n");
     
-    /* Check LED device is ready */
-    if (!device_is_ready(LED_DEVICE)) {
-        printk("ERROR: LED device not ready!\n");
+    /* Initialize our simple LED driver */
+    int ret = simple_led_init();
+    if (ret != 0) {
+        printk("ERROR: Simple LED driver initialization failed: %d\n", ret);
         printk("Check devicetree: led1 node with valid GPIO configuration\n");
         return -1;
     }
     
     printk("LED device initialized successfully\n");
     printk("GPIO11 LED driver ready\n");
-    printk("Testing both ACTIVE_HIGH and ACTIVE_LOW configurations...\n");
     
     /* Core firmware loop - sends ON/OFF commands to LED driver */
     led_command_t command = LED_OFF;

@@ -91,6 +91,54 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s);
  */
 int stepper_stop(enum stepper_motor motor);
 
+/**
+ * @brief Check if stepper motor is enabled
+ * 
+ * @param motor Which motor to check
+ * @return true if enabled, false if disabled
+ */
+bool stepper_is_enabled(enum stepper_motor motor);
+
+/* Step counting functions for debugging */
+
+/**
+ * @brief Start counting steps for movement debugging
+ * 
+ * @param expected_degrees Expected degrees of movement for comparison
+ */
+void stepper_start_counting(float expected_degrees);
+
+/**
+ * @brief Stop counting steps and log results
+ */
+void stepper_stop_counting(void);
+
+/**
+ * @brief Get current movement step count
+ * 
+ * @return Number of steps in current movement
+ */
+uint32_t stepper_get_step_count(void);
+
+/**
+ * @brief Get total step count since initialization
+ * 
+ * @return Total number of steps since init
+ */
+uint32_t stepper_get_total_steps(void);
+
+/**
+ * @brief Reset step counters to zero
+ */
+void stepper_reset_counters(void);
+
+/**
+ * @brief Get GPIO pulse count (total pulses sent to step pin)
+ * 
+ * @return Number of GPIO pulses sent
+ */
+uint32_t stepper_get_gpio_pulse_count(void);
+
 #ifdef __cplusplus
 }
 #endif

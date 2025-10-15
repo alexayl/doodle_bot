@@ -1,7 +1,7 @@
 from __future__ import annotations
 import time, cv2, numpy as np
 from collections import deque
-
+import math
 # ---- JPEG ----
 try:
     from turbojpeg import TurboJPEG

@@ -1,9 +1,4 @@
 / {
-    aliases {
-        servo0 = &servo;
-        servo1 = &servo_marker;
-    };
-
     /* Servo motor for eraser control - GPIO2 PWM */
     servo_eraser: servo_eraser {
         status = "okay";
@@ -25,7 +20,7 @@
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* GPIO5 - Step pulses */
+        pwms = <&ledc0 3 20000 0>;                     /* 20ms period, channel 3, GPIO5 - Step pulses via PWM */
         dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* GPIO6 - Direction control */
         en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* GPIO7 - Enable/disable */
         label = "LEFT_STEPPER";
@@ -65,16 +60,46 @@
         label = "PWM_BUZZER";
     };
 
+    /* Latency measurement feedback pins - jumper wire connections */
+    latency_feedback {
+        compatible = "gpio-keys";
+        
+        led_feedback: led_feedback {
+            gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;  /* GPIO10 - LED feedback */
+            label = "LED_FEEDBACK";
+        };
+        
+        buzzer_feedback: buzzer_feedback {
+            gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;  /* GPIO13 - Buzzer feedback */
+            label = "BUZZER_FEEDBACK";
+        };
+        
+        servo_eraser_feedback: servo_eraser_feedback {
+            gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;  /* GPIO14 - Servo eraser feedback */
+            label = "SERVO_ERASER_FEEDBACK";
+        };
+        
+        servo_marker_feedback: servo_marker_feedback {
+            gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;  /* GPIO15 - Servo marker feedback */
+            label = "SERVO_MARKER_FEEDBACK";
+        };
+    };
+
     aliases {
         stepper-left = &stepper_left;
         stepper-right = &stepper_right;
         servo-eraser = &servo_eraser;
         servo-marker = &servo_marker;
-        servo0 = &servo_eraser;
-        servo1 = &servo_marker;
+        servoe = &servo_eraser;  /* servo eraser */
+        servom = &servo_marker;  /* servo marker */
         led0 = &led1;
         buzzer0 = &buzzer;
         pwm-buzzer0 = &pwm_buzzer;
+        /* Latency measurement aliases */
+        led-feedback = &led_feedback;
+        buzzer-feedback = &buzzer_feedback;
+        servo-eraser-feedback = &servo_eraser_feedback;
+        servo-marker-feedback = &servo_marker_feedback;
     };
 };
 
@@ -98,7 +123,12 @@
 
     channel2@2 {
         reg = <0x2>;
-        timer = <0>;
+        timer = <1>;
+    };
+
+    channel3@3 {
+        reg = <0x3>;
+        timer = <1>;
     };
 };
 
@@ -107,7 +137,8 @@
         group1 {
             pinmux = <LEDC_CH0_GPIO2>,   /* GPIO2 - Servo PWM on Channel 0 */
                      <LEDC_CH1_GPIO3>,   /* GPIO3 - Servo PWM on Channel 1 */
-                     <LEDC_CH2_GPIO12>;  /* GPIO12 - Buzzer PWM on Channel 2 */
+                     <LEDC_CH2_GPIO12>,  /* GPIO12 - Buzzer PWM on Channel 2 */
+                     <LEDC_CH3_GPIO5>;   /* GPIO5 - Stepper PWM on Channel 3 */
             output-enable;
         };
     };

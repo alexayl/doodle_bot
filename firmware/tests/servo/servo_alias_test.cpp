@@ -1,23 +1,25 @@
-﻿#include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/devicetree.h>
-#include <servo.h>
+/*
+ * Simple servo test using alias-based initialization
+ */
 
-int main()
+#include <zephyr/kernel.h>
+#include "servo.h"
+
+int main(void)
 {
-    printk("Servo Alias Test - Using servo_init_by_alias()\n");
+    printk("Servo Alias Test\n");
 
     // Initialize servos by alias
-    const struct device *servo_eraser = servo_init_by_alias("servoe");  // servo eraser
-    const struct device *servo_marker = servo_init_by_alias("servom");  // servo marker
+    const struct device *servo_eraser = servo_init_by_alias("servo0");
+    const struct device *servo_marker = servo_init_by_alias("servo1");
     
     if (!servo_eraser) {
-        printk("ERROR: Failed to initialize servoe (eraser)\n");
+        printk("ERROR: Failed to initialize servo0 (eraser)\n");
         return -1;
     }
     
     if (!servo_marker) {
-        printk("ERROR: Failed to initialize servom (marker)\n");
+        printk("ERROR: Failed to initialize servo1 (marker)\n");
         return -1;
     }
     
@@ -28,36 +30,36 @@ int main()
         cycle++;
         printk("\n=== Cycle %d ===\n", cycle);
         
-        // Test servoe (eraser) - GPIO2
-        printk("Moving servoe (eraser) to 0°\n");
+        // Test servo0 (eraser) - GPIO2
+        printk("Moving servo0 (eraser) to 0°\n");
         servo_set_angle(servo_eraser, 0);
         k_sleep(K_MSEC(500));
         
-        printk("Moving servoe (eraser) to 90°\n");
+        printk("Moving servo0 (eraser) to 90°\n");
         servo_set_angle(servo_eraser, 90);
         k_sleep(K_MSEC(500));
         
-        printk("Moving servoe (eraser) to 180°\n");
+        printk("Moving servo0 (eraser) to 180°\n");
         servo_set_angle(servo_eraser, 180);
         k_sleep(K_MSEC(500));
         
-        // Test servom (marker) - GPIO3
-        printk("Moving servom (marker) to 0°\n");
+        // Test servo1 (marker) - GPIO3
+        printk("Moving servo1 (marker) to 0°\n");
         servo_set_angle(servo_marker, 0);
         k_sleep(K_MSEC(500));
         
-        printk("Moving servom (marker) to 90°\n");
+        printk("Moving servo1 (marker) to 90°\n");
         servo_set_angle(servo_marker, 90);
         k_sleep(K_MSEC(500));
         
-        printk("Moving servom (marker) to 180°\n");
+        printk("Moving servo1 (marker) to 180°\n");
         servo_set_angle(servo_marker, 180);
         k_sleep(K_MSEC(500));
         
         // Test using alias functions directly
         printk("Using alias functions:\n");
-        servo_set_angle_by_alias("servoe", 45);
-        servo_set_angle_by_alias("servom", 135);
+        servo_set_angle_by_alias("servo0", 45);
+        servo_set_angle_by_alias("servo1", 135);
         k_sleep(K_MSEC(1000));
         
         printk("Cycle %d complete\n", cycle);
