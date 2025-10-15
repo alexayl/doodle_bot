@@ -13,7 +13,7 @@ description: |
       status = "okay";
       compatible = "doodle,a4988-stepper";
       micro-step-res = <16>;
-      step-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+      pwms = <&ledc0 3 20000 0>;           /* PWM for step pulses */
       dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
       en-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
   };
@@ -28,10 +28,10 @@ properties:
     type: string
     description: Human readable string describing the device.
 
-  step-gpios:
+  pwms:
     required: true
     type: phandle-array
-    description: GPIO pins used to send step signals to the stepper motor.
+    description: PWM used to generate step signals for the stepper motor.
 
   dir-gpios:
     required: true

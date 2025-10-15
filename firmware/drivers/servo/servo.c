@@ -45,6 +45,47 @@ int servo_set_angle(const struct device *dev, uint8_t angle)
     return pwm_set_dt(&config->pwm, PWM_USEC(period), PWM_USEC(pulse));
 }
 
+int servo_set_angle_by_alias(const char *alias, uint8_t angle)
+{
+    const struct device *dev = NULL;
+    
+    if (strcmp(alias, "servoe") == 0 || strcmp(alias, "servo-eraser") == 0) {
+        dev = DEVICE_DT_GET(DT_NODELABEL(servo_eraser));
+    } else if (strcmp(alias, "servom") == 0 || strcmp(alias, "servo-marker") == 0) {
+        dev = DEVICE_DT_GET(DT_NODELABEL(servo_marker));
+    }
+    
+    if (!dev) {
+        LOG_ERR("Servo device with alias '%s' not found", alias);
+        return -ENODEV;
+    }
+    return servo_set_angle(dev, angle);
+}
+
+const struct device *servo_init_by_alias(const char *alias)
+{
+    const struct device *dev = NULL;
+    
+    if (strcmp(alias, "servoe") == 0 || strcmp(alias, "servo-eraser") == 0) {
+        dev = DEVICE_DT_GET(DT_NODELABEL(servo_eraser));
+    } else if (strcmp(alias, "servom") == 0 || strcmp(alias, "servo-marker") == 0) {
+        dev = DEVICE_DT_GET(DT_NODELABEL(servo_marker));
+    }
+    
+    if (!dev) {
+        LOG_ERR("Servo device with alias '%s' not found", alias);
+        return NULL;
+    }
+    
+    if (!device_is_ready(dev)) {
+        LOG_ERR("Servo device '%s' not ready", dev->name);
+        return NULL;
+    }
+    
+    LOG_INF("Servo initialized by alias '%s' -> device %s", alias, dev->name);
+    return dev;
+}
+
 static int servo_init(const struct device *dev)
 {
     const struct servo_config *config = dev->config;
