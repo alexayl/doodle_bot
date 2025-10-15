@@ -17,13 +17,13 @@ void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
         k_msgq_get(q, &current_instruction, K_NO_WAIT);
         
         // Use printf instead of iostream
-        printf("Nav thread received: x_delta=%d, y_delta=%d\n", 
-               static_cast<int>(current_instruction.x_delta),
-               static_cast<int>(current_instruction.y_delta));
+        // printf("Nav thread received: x_delta=%d, y_delta=%d\n", 
+        //        static_cast<int>(current_instruction.x_delta),
+        //        static_cast<int>(current_instruction.y_delta));
         
         gcode_to_nav(current_instruction);
 
-        send_nav_instr();
+        print_nav_instr(current_instruction);
 
         k_msleep(1000);
     }

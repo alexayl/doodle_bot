@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include <ostream>
+#include <zephyr/sys/printk.h>
 
 
 /* Data types */
@@ -20,12 +20,12 @@ struct stepper_instr_t {
     StepperDirection stepper_direction; 
 };
 
-inline std::ostream& operator<<(std::ostream& os, const nav_instr_t& instr) {
-    os << "x_delta: " << static_cast<int>(instr.x_delta)
-       << ", y_delta: " << static_cast<int>(instr.y_delta)
-       << ", eraser_position: " << (instr.eraser_position == PeripheralPosition::Up ? "Up" : "Down")
-       << ", marker_position: " << (instr.marker_position == PeripheralPosition::Up ? "Up" : "Down");
-    return os;
+inline void print_nav_instr(const nav_instr_t& instr) {
+    printk("x_delta: %d, y_delta: %d, eraser_position: %s, marker_position: %s\n",
+           static_cast<int>(instr.x_delta),
+           static_cast<int>(instr.y_delta),
+           (instr.eraser_position == PeripheralPosition::Up ? "Up" : "Down"),
+           (instr.marker_position == PeripheralPosition::Up ? "Up" : "Down"));
 }
 
 /* Functions */

@@ -1,45 +1,43 @@
 #pragma once
 
 #include <stddef.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/services/nus.h>
+#include <zephyr/sys/printk.h>
 
 class ble_service {
 public:
+
+	/**
+	 * init - performs hardware initialization and links handlers to service.
+	 */
     static void init();
+
+	/**
+	 * send - advertises inputted message (tx characteristic)
+	 */
     static void send(const char *data, size_t len);
+
+	/**
+	 * receieve - called when new message received (rx characteristic)
+	 */
+    static void receive(const void *data, uint16_t len);
+
+	/**
+	 * is_connected - double-checks connection
+	 */
     static bool is_connected();
 
 private:
-#define DEVICE_NAME		CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN		(sizeof(DEVICE_NAME) - 1)
+    static constexpr const char* DEVICE_NAME = "DOODLEBOT";
+    static constexpr size_t DEVICE_NAME_LEN = sizeof(DEVICE_NAME) - 1;
 
-static const struct bt_data ad[] = {
-	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-};
+    static const struct bt_data ad[];
+    static const struct bt_data sd[];
+    static struct bt_nus_cb nus_listener;
 
-static const struct bt_data sd[] = {
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NUS_SRV_VAL),
-};
-
-static void notif_enabled(bool enabled, void *ctx)
-{
-	ARG_UNUSED(ctx);
-
-	printk("%s() - %s\n", __func__, (enabled ? "Enabled" : "Disabled"));
-}
-
-static void received(struct bt_conn *conn, const void *data, uint16_t len, void *ctx)
-{
-	ARG_UNUSED(conn);
-	ARG_UNUSED(ctx);
-
-	printk("%s() - Len: %d, Message: %.*s\n", __func__, len, len, (char *)data);
-}
-
-struct bt_nus_cb nus_listener = {
-	.notif_enabled = notif_enabled,
-	.received = received,
-};
+    static void notif_enabled(bool enabled, void *ctx);
+    static void received(struct bt_conn *conn, const void *data, uint16_t len, void *ctx);
 };
 
 void comms_thread(void *, void *, void *);
