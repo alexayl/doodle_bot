@@ -1,5 +1,4 @@
 #include <zephyr/kernel.h>
-#include "comms.h"
 #include "navigation.h"
 #include <stdbool.h>
 #include <stdio.h> // Use printf instead of iostream
@@ -23,14 +22,11 @@ void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
         
         gcode_to_nav(current_instruction);
 
-        print_nav_instr(current_instruction);
+        // print_nav_instr(current_instruction);
 
         k_msleep(1000);
     }
 
     return;
-}
 
-void send_nav_instr() {
-    // TODO: Implement navigation instruction sending
 }
