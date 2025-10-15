@@ -32,11 +32,11 @@ def simulate(filename, canvas_size=(575, 730)):
                 absolute_mode = False
             elif line.startswith('G1'):
                 parts = line.split()
-                if len(parts) >= 4:
+
+                if len(parts) >= 3:
                     try:
-                        dx = int(parts[1])
-                        dy = int(parts[2])
-                        dz = int(parts[3])
+                        dx = int(parts[1][1:])
+                        dy = int(parts[2][1:])
                         
                         # Set initial position from first G1 command
                         if first_move:
@@ -62,12 +62,24 @@ def simulate(filename, canvas_size=(575, 730)):
                             'pen_down': pen_down
                         })
                         
-                        # Update pen state AFTER the movement
-                        if dz > 0:
-                            pen_down = False
-                        elif dz < 0:
-                            pen_down = True
+                        # # Update pen state AFTER the movement
+                        # if dz > 0:
+                        #     pen_down = False
+                        # elif dz < 0:
+                        #     pen_down = True
                             
+                    except (ValueError, IndexError):
+                        continue
+            
+            elif line.startswith('M280'):
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        dz = int(parts[2][1:])
+                        if dz == 90:
+                            pen_down = False
+                        elif dz == 0:
+                            pen_down = True
                     except (ValueError, IndexError):
                         continue
     
