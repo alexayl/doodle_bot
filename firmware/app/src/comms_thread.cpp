@@ -84,11 +84,10 @@ void comms_thread(void *nav_instr_queue, void *arg2, void *arg3) {
     bleService.init();
 
     while(true) {
-        const char *hello_world = "Hello World!\n";
-
         k_sleep(K_SECONDS(3));
+        // Optional: Send periodic heartbeat
+        // const char *hello_world = "Hello World!\n";
         // bleService.send(hello_world, strlen(hello_world));
-
     }
 
     // Clear global pointer before exiting

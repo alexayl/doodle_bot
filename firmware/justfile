@@ -125,6 +125,10 @@ test-instruction_parser: clean
   west build -b native_sim tests/instruction_parser
   west build -t run
 
+test-navigation: clean
+  west build -b native_sim tests/navigation
+  west build -t run
+
 test-app-all: test-state_machine test-instruction_parser
 
 
