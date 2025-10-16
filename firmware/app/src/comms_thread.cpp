@@ -5,10 +5,14 @@
 #include "navigation.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 //------------------
 // THREAD
 // -----------------
+
+/* GLOBAL BLE SERVICE INSTANCE */
+static BleService* g_bleService = nullptr;
 
 /* THREAD FUNCTIONS */
 
@@ -16,26 +20,53 @@
 void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     printk("G-code handler processing %d bytes\n", len);
+
+    bool failed = false;
+    uint8_t received_packet_id = 0;
     
-    // Parse received G-code
-    InstructionParser parser;
+    // Parse received G-code - use static parser to maintain packet ID state
+    static InstructionParser parser;
     InstructionParser::GCodeCmd cmd;
+    
+    // Store the packet ID that was expected before parsing
+    uint8_t expected_packet_id = parser.packet_id;
     
     if (!parser.parseLine((const char*)data, cmd)) {
         printk("Handler: Failed to parse G-code\n");
-        return;
+        failed = true;
+        received_packet_id = expected_packet_id; // Use expected since parsing failed
+    } else {
+        // Parsing succeeded, so packet ID was incremented. The received ID was (current - 1)
+        received_packet_id = parser.packet_id - 1;
     }
     
-    if (!InstructionParser::isSupported(cmd)) {
+    if (!failed && !InstructionParser::isSupported(cmd)) {
         printk("Handler: Unsupported G-code command\n");
-        return;
+        failed = true;
     }
 
-    printk("Handler: Processing G-code %c%d\n", cmd.code, cmd.number);
+    if (failed) {
+        // Send NACK with packet ID as first byte
+        if (g_bleService) {
+            char nack[10];
+            nack[0] = received_packet_id;  // Packet ID as first byte
+            strcpy(&nack[1], "error\n");
+            g_bleService->send(nack, strlen(&nack[1]) + 1);
+        }
+        return;
+    }
 
     // Queue parsed instruction for navigation
     if (k_msgq_put(q, &cmd, K_NO_WAIT) != 0) {
         printk("Queue full, dropping message\n");
+    }
+
+    // Send ACK with packet ID as first byte
+    if (g_bleService) {
+        char ack[10];
+        ack[0] = received_packet_id;  // Packet ID as first byte
+        strcpy(&ack[1], "ok\n");
+        g_bleService->send(ack, strlen(&ack[1]) + 1);
     }
 
 }
@@ -46,6 +77,10 @@ void comms_thread(void *nav_instr_queue, void *arg2, void *arg3) {
 
     // Create BLE service with queue and handler
     BleService bleService(q, gcode_to_nav_handler);
+    
+    // Set global pointer for handler access
+    g_bleService = &bleService;
+    
     bleService.init();
 
     while(true) {
@@ -56,6 +91,7 @@ void comms_thread(void *nav_instr_queue, void *arg2, void *arg3) {
 
     }
 
-
+    // Clear global pointer before exiting
+    g_bleService = nullptr;
     return;
 }

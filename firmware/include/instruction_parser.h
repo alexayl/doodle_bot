@@ -12,6 +12,8 @@
 
 class InstructionParser {
 public:
+    uint8_t packet_id = 0;
+
     static constexpr uint8_t MAX_ARGS = 8;
 
     struct Arg {

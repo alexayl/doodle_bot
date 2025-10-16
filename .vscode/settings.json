@@ -9,7 +9,10 @@
         "stdio.h": "c",
         "iosfwd": "cpp",
         "*.s": "cpp",
-        "iostream": "cpp"
+        "iostream": "cpp",
+        "system_error": "cpp",
+        "regex": "cpp",
+        "random": "cpp"
     },
     "idf.portWin": "COM7",
 }

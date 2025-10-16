@@ -1,4 +1,5 @@
 #include "instruction_parser.h"
+#include <zephyr/sys/printk.h>
 
 //-------------------------
 // INSTRUCTION PARSING
@@ -11,10 +12,20 @@ bool InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     // skip whitespace
     while (isspace(*ptr)) ptr++;
 
+    // find and validate packet id
+    if ((uint8_t)*ptr++ == packet_id) {
+        packet_id++;
+    } else {
+        printk("Packet ID mismatch: expected %d, got %d\n", packet_id, (uint8_t)*(ptr-1));
+        return false;
+    }
+
     // first char must be G or M
     outCmd.code = toupper(*ptr++);
-    if (outCmd.code != 'G' && outCmd.code != 'M')
+    if (outCmd.code != 'G' && outCmd.code != 'M') {
+        printk("Invalid command code: %c\n", outCmd.code);
         return false;
+    }
 
     // read the numeric command number (e.g. 0, 91, 280)
     outCmd.number = atoi(ptr);
