@@ -53,7 +53,12 @@ elseif(CONFIG_PERIPHERAL_DEMO)
     )
 else()
     file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
-    target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
+    target_sources(app PRIVATE ${DOODLE_BOT_SOURCES}
+        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/buzzer.c
+        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
+        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
+    )
 endif()
 
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)

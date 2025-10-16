@@ -19,7 +19,7 @@ int hardware_init() {
 
     // servo
     // TODO: get init from jain
-    const struct device *servo_eraser = servo_init_by_alias
+    // const struct device *servo_eraser = servo_init_by_alias
 
     // leds
     simple_led_init();
@@ -53,9 +53,9 @@ void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
             case InstructionParser::G1:
                 printf("Nav thread received G0 command\n");
                 // process stepper movement
-                move_stepper()
+                // move_stepper()
                 // process servo movement
-                move_servo(current_instrution.);
+                // move_servo(current_instrution.);
                 break;
             case InstructionParser::M280:
                 printf("Nav thread received M280 command\n");
