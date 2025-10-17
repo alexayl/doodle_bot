@@ -5,7 +5,7 @@
  * - Servos: Move back and forth
  * - Buzzer: Toggle on/off (using PWM buzzer toggle)
  * - LED: Toggle on/off (GPIO11)
- * - Stepper: 360° forward and backward
+ * - Stepper: 90° forward and backward
  */
 
 #include <zephyr/kernel.h>
@@ -15,10 +15,12 @@
 #include <stdlib.h> // For abs() function
 
 // Include all your drivers
+extern "C" {
 #include "stepper.h"
 #include "pwm_buzzer.h"
 #include "servo.h"
 #include "simple_led.h"
+}
 
 /* Servo devices from device tree */
 static const struct device *servo_eraser;
