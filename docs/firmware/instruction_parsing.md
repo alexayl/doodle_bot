@@ -25,3 +25,7 @@ G91             // turn on relative positioning
 M280 P0 S0      // set the pen down
 G1 X10 Y-10     // move to the right 10 mm and down 10 mm
 ```
+
+## Protecting against corrupted packets
+
+If the G-code parser fails to parse a command, it will ask for a retry via the packet ID. This ID is the first byte of each packet and counts up from 0 to 2^8-1 with each successive packet.

@@ -8,7 +8,12 @@
         "printk.h": "c",
         "stdio.h": "c",
         "iosfwd": "cpp",
-        "*.s": "cpp"
+        "*.s": "cpp",
+        "iostream": "cpp",
+        "system_error": "cpp",
+        "regex": "cpp",
+        "random": "cpp",
+        "cmath": "cpp"
     },
     "idf.portWin": "COM7",
 }

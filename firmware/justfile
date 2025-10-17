@@ -1,6 +1,6 @@
 # Cross-platform shell configuration
-# Windows uses PowerShell by default; Unix recipes use shebang to override when needed
-set shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+# On Windows, use PowerShell for recipes that need it
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # ------------------
 #  Configurables
@@ -92,6 +92,16 @@ build-blinky:
     {{CMAKE_CACHE_ARGS}} \
     -DEXTRA_DTC_OVERLAY_FILE="{{justfile_directory()}}/zephyr/samples/basic/blinky_pwm/boards/nrf52840dk_nrf52840.overlay"
 
+build-ble: clean
+  west build \
+    -p always \
+    -b "{{NRF_BOARD}}" \
+    -d build \
+    zephyr/samples/bluetooth/peripheral_nus \
+    {{CMAKE_CACHE_ARGS}} 
+
+run-ble: build-ble flash-nrf monitor-nrf
+
 
 # TODO: add overlay file for nRF52840
 
@@ -105,14 +115,25 @@ monitor-nrf:
 run-nrf: build-nrf flash-nrf monitor-nrf
 
 # ------------------
-# Tests - Cross Platform
+# Tests - Application
 # ------------------
-test: clean
+test-state_machine: clean
   west build -b native_sim tests/state_machine
   west build -t run
 
+test-instruction_parser: clean
+  west build -b native_sim tests/instruction_parser
+  west build -t run
+
+test-navigation: clean
+  west build -b native_sim tests/navigation
+  west build -t run
+
+test-app-all: test-state_machine test-instruction_parser
+
+
 # ------------------
-# Tests - NRF52840
+# Tests - Drivers
 # ------------------
 test-nrf-servo: _verify_workspace clean
   west build \

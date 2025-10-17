@@ -20,7 +20,7 @@
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        pwms = <&pwm0 2 20000 0>;                      /* 20ms period, channel 2, P0.02 - Step pulses via PWM */
+        pwms = <&pwm0 2 20000 0>;                      /* PWM for step pulses - P0.02 */
         dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;       /* P0.03 - Direction control */
         en-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;         /* P0.04 - Enable/disable */
         label = "LEFT_STEPPER";
@@ -31,7 +31,7 @@
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
+        pwms = <&pwm0 5 20000 0>;                      /* PWM for step pulses - P0.05 */
         dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* P0.06 - Direction control */
         en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* P0.07 - Enable/disable */
         label = "RIGHT_STEPPER";

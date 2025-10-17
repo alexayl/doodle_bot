@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <zephyr/sys/printk.h>
 
-#include "comms.h"
+#include "instruction_parser.h"
+#include "comms_thread.h"
 #include "navigation.h"
 #include "state_task.h"
 // #include "ui.h"
@@ -11,7 +12,7 @@
 
 #define MESSAGES_PER_QUEUE 5
 
-K_MSGQ_DEFINE(nav_instr_queue, sizeof(nav_instr_t), MESSAGES_PER_QUEUE, alignof(nav_instr_t));
+K_MSGQ_DEFINE(nav_instr_queue, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
 
 /* THREAD DEFINITION AND MANAGEMENT */
 
