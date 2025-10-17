@@ -12,7 +12,8 @@
         "iostream": "cpp",
         "system_error": "cpp",
         "regex": "cpp",
-        "random": "cpp"
+        "random": "cpp",
+        "cmath": "cpp"
     },
     "idf.portWin": "COM7",
 }
