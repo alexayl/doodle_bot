@@ -133,72 +133,33 @@ test-app-all: test-state_machine test-instruction_parser
 
 
 # ------------------
-# Tests - Generic parameterized approach
+# Tests - Drivers (Parameterized)
 # ------------------
 
-# Generic test runner: just test BOARD TEST_TYPE
-# Examples: 
-#   just test nrf servo
-#   just test esp led
-#   just test nrf stepper
-test BOARD TEST_TYPE: _verify_workspace clean
-  #!/bin/bash
-  case "{{BOARD}}" in
-    "nrf")
-      BOARD_NAME="{{NRF_BOARD}}"
-      PORT="{{NRF_PORT}}"
-      ;;
-    "esp")
-      BOARD_NAME="{{ESP_BOARD}}"
-      PORT="{{ESP_PORT}}"
-      ;;
-    *)
-      echo "ERROR: Unknown board '{{BOARD}}'. Use 'nrf' or 'esp'"
-      exit 1
-      ;;
-  esac
-  
-  case "{{TEST_TYPE}}" in
-    "servo")
-      CONFIG_FLAG="-DCONFIG_SERVO_TEST=y"
-      ;;
-    "led")
-      CONFIG_FLAG="-DCONFIG_LED_TEST=y"
-      ;;
-    "buzzer")
-      CONFIG_FLAG="-DCONFIG_BUZZER_TEST=y"
-      ;;
-    "stepper")
-      CONFIG_FLAG="-DCONFIG_STEPPER_TEST=y"
-      ;;
-    "pwm-buzzer")
-      CONFIG_FLAG="-DCONFIG_PWM_BUZZER_DRIVER_TEST=y"
-      ;;
-    *)
-      echo "ERROR: Unknown test type '{{TEST_TYPE}}'. Use: servo, led, buzzer, stepper, pwm-buzzer"
-      exit 1
-      ;;
-  esac
-  
-  echo "Building {{TEST_TYPE}} test for {{BOARD}} board..."
+# Generic test recipe that works for both platforms
+_test_driver platform driver_name config_name: _verify_workspace clean
   west build \
     -p always \
-    -b "$BOARD_NAME" \
+    -b "{{ if platform == "esp" { ESP_BOARD } else { NRF_BOARD } }}" \
     -d build \
     app \
     {{CMAKE_CACHE_ARGS}} \
-    "$CONFIG_FLAG"
-  
-  echo "Flashing to {{BOARD}}..."
+    -D{{config_name}}=y
   west flash --build-dir build
-  
-  echo "Starting serial monitor on $PORT..."
-  python -m serial.tools.miniterm "$PORT" 115200
+  python -m serial.tools.miniterm "{{ if platform == "esp" { ESP_PORT } else { NRF_PORT } }}" 115200
 
-# Run all tests for a specific board
-test-all-nrf: (test "nrf" "servo") (test "nrf" "led") (test "nrf" "buzzer") (test "nrf" "stepper")
+# NRF52840 test aliases
+test-nrf-servo: (_test_driver "nrf" "servo" "CONFIG_SERVO_TEST")
+test-nrf-led: (_test_driver "nrf" "led" "CONFIG_LED_TEST")
+test-nrf-buzzer: (_test_driver "nrf" "buzzer" "CONFIG_BUZZER_TEST")
+test-nrf-stepper: (_test_driver "nrf" "stepper" "CONFIG_STEPPER_TEST")
 
-test-all-esp: (test "esp" "servo") (test "esp" "led") (test "esp" "buzzer") (test "esp" "stepper") (test "esp" "pwm-buzzer")
+# ESP32-S3 test aliases
+test-esp-servo: (_test_driver "esp" "servo" "CONFIG_SERVO_TEST")
+test-esp-led: (_test_driver "esp" "led" "CONFIG_LED_TEST")
+test-esp-buzzer: (_test_driver "esp" "buzzer" "CONFIG_BUZZER_TEST")
+test-esp-pwm-buzzer: (_test_driver "esp" "pwm-buzzer" "CONFIG_PWM_BUZZER_DRIVER_TEST")
+test-esp-stepper: (_test_driver "esp" "stepper" "CONFIG_STEPPER_TEST")
 
 # Run comprehensive peripheral demo showing all components
 demo-esp: _verify_workspace clean
