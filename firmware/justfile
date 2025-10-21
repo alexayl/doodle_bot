@@ -133,109 +133,72 @@ test-app-all: test-state_machine test-instruction_parser
 
 
 # ------------------
-# Tests - Drivers
+# Tests - Generic parameterized approach
 # ------------------
-test-nrf-servo: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_SERVO_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
 
-test-nrf-led: _verify_workspace clean
+# Generic test runner: just test BOARD TEST_TYPE
+# Examples: 
+#   just test nrf servo
+#   just test esp led
+#   just test nrf stepper
+test BOARD TEST_TYPE: _verify_workspace clean
+  #!/bin/bash
+  case "{{BOARD}}" in
+    "nrf")
+      BOARD_NAME="{{NRF_BOARD}}"
+      PORT="{{NRF_PORT}}"
+      ;;
+    "esp")
+      BOARD_NAME="{{ESP_BOARD}}"
+      PORT="{{ESP_PORT}}"
+      ;;
+    *)
+      echo "ERROR: Unknown board '{{BOARD}}'. Use 'nrf' or 'esp'"
+      exit 1
+      ;;
+  esac
+  
+  case "{{TEST_TYPE}}" in
+    "servo")
+      CONFIG_FLAG="-DCONFIG_SERVO_TEST=y"
+      ;;
+    "led")
+      CONFIG_FLAG="-DCONFIG_LED_TEST=y"
+      ;;
+    "buzzer")
+      CONFIG_FLAG="-DCONFIG_BUZZER_TEST=y"
+      ;;
+    "stepper")
+      CONFIG_FLAG="-DCONFIG_STEPPER_TEST=y"
+      ;;
+    "pwm-buzzer")
+      CONFIG_FLAG="-DCONFIG_PWM_BUZZER_DRIVER_TEST=y"
+      ;;
+    *)
+      echo "ERROR: Unknown test type '{{TEST_TYPE}}'. Use: servo, led, buzzer, stepper, pwm-buzzer"
+      exit 1
+      ;;
+  esac
+  
+  echo "Building {{TEST_TYPE}} test for {{BOARD}} board..."
   west build \
     -p always \
-    -b "{{NRF_BOARD}}" \
+    -b "$BOARD_NAME" \
     -d build \
     app \
     {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_LED_TEST=y
+    "$CONFIG_FLAG"
+  
+  echo "Flashing to {{BOARD}}..."
   west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+  
+  echo "Starting serial monitor on $PORT..."
+  python -m serial.tools.miniterm "$PORT" 115200
 
-test-nrf-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_BUZZER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+# Run all tests for a specific board
+test-all-nrf: (test "nrf" "servo") (test "nrf" "led") (test "nrf" "buzzer") (test "nrf" "stepper")
 
-test-nrf-stepper: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_STEPPER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
-
-# ------------------
-# Tests - ESP32-S3
-# ------------------
-test-esp-servo: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_SERVO_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-led: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_LED_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_BUZZER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-pwm-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_PWM_BUZZER_DRIVER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-stepper: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_STEPPER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+test-all-esp: (test "esp" "servo") (test "esp" "led") (test "esp" "buzzer") (test "esp" "stepper") (test "esp" "pwm-buzzer")
 
 # Run comprehensive peripheral demo showing all components
 demo-esp: _verify_workspace clean
