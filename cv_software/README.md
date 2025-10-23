@@ -1,56 +1,43 @@
-# DoodleBot Computer Vision
 
-## Overview
-The Computer Vision (CV) subsystem provides real-time localization and feedback for the DoodleBot platform.  
-It runs on a Raspberry Pi 5 and integrates camera-based perception, geometric calibration, and marker-based pose estimation using **OpenCV** and **ArUco** detection.  
-The subsystem continuously tracks the robot’s position and orientation on the drawing board and communicates live correction data to the firmware over Bluetooth.  
-A Flask-based web interface enables real-time monitoring through annotated video streams and provides REST APIs for control, status, and telemetry.
+---
 
-## Features
-- **Multi-threaded Frame Capture:**  
-  Captures frames asynchronously at up to 30 fps using a low-latency video backend with sharpness and exposure filtering.
-- **Board Calibration and Homography Mapping:**  
-  Uses four fixed ArUco markers to compute a perspective transform that aligns the camera’s image space to the board coordinate system.
-- **Marker-Based Localization:**  
-  Detects two robot-mounted fiducial markers to determine position and heading in millimeter-scale precision.
-- **Dynamic Scaling:**  
-  Automatically derives pixel-to-millimeter conversion from board geometry or marker baseline.
-- **Web Visualization and Telemetry:**  
-  Streams annotated video, calibration metrics, and robot pose data via Flask endpoints for live visualization and integration with other subsystems.
+### Distribution Plan (Computer Vision Subsystem)
 
-## Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/alexayl/doodle_bot.git
-   cd cv_software
-   ```
+The Computer Vision subsystem will be distributed as a runnable Python application on the Raspberry Pi that integrates seamlessly with the Pathfinding and Firmware subsystems. No hardware modification or manual calibration is required beyond the printed ArUco board markers.
 
-2. Create a virtual environment and install dependencies:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+**Usage and Integration**
 
-3. (Optional) To improve latency, enable MJPEG mode for UVC cameras on Linux:
-   ```bash
-   v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=MJPG
-   ```
+* The Flask server (`app/server.py`) provides `/stream`, `/draw`, and `/erase` endpoints for visualization, command input, and coordination with the robot.
+* The CV pipeline (`app/cv_core.py`) automatically calibrates to the board, tracks robot pose, and computes real-time corrections.
+* Pathfinding outputs `.gcode` files that are uploaded via `/draw` and automatically scaled to the board.
+* The subsystem communicates with the firmware through BLE using the `BTLink` module, sending batched relative waypoints.
 
-4. Launch the application:
-   ```bash
-   python3 -m app.server
-   ```
+**Deployment**
 
-## Usage
-- Access the web interface at `http://<raspberrypi-ip>:5000`.
-- Modes:
-  - **/draw:** Upload an image for path rendering.
-  - **/erase:** Command the robot to clear the workspace.
-- API Endpoints:
-  - `/api/moves` – enqueue motion commands.
-  - `/api/pen` – toggle pen state (up/down).
-  - `/api/stop` – halt motion.
-  - `/stream` – retrieve the live annotated camera feed.
-  - `/health` – report calibration and detection status.
-- Logs and captured images are stored in the `uploads/` directory.
+* Clone the repository on the Raspberry Pi and run:
+
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  python -m app.server
+  ```
+* Once running, open a browser to `http://<pi>:5000/stream` to view live tracking and initiate drawing or erasing.
+
+**Validation**
+
+* System is considered operational when:
+
+  * The board and robot markers are detected and stable on `/stream`.
+  * Pose updates occur at ≥ 10 Hz with ≤ 120 ms median latency.
+  * Uploaded paths execute within board bounds and respond to correction feedback.
+
+**End-of-Semester Distribution**
+
+* Deliverables include:
+
+  * Final Git tag (`cv-v1.0`) containing all source files.
+  * `requirements.txt` for setup.
+  * Calibration PDF with ArUco marker layout.
+
+---
