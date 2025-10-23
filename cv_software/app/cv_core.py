@@ -20,8 +20,11 @@ BOT_BASELINE_MM = 60.0
 # testing on a board of this dims
 # KNOWN_BOARD_WIDTH_MM = 1150.0
 # KNOWN_BOARD_HEIGHT_MM = 1460.0
-KNOWN_BOARD_HEIGHT_MM = 350.0
-KNOWN_BOARD_WIDTH_MM = 400
+KNOWN_BOARD_HEIGHT_MM = 250.0
+KNOWN_BOARD_WIDTH_MM = 200
+_MAX_REPROJ_ERR_PX = 0.8
+_MAX_SIZE_JUMP_FRAC = 0.12
+_MAX_CENTER_JUMP_PX = 30.0 
 @dataclass
 class CameraModel:
     """Optional camera intrinsics/distortion used to undistort frames before detection."""
@@ -57,8 +60,12 @@ def _aruco_params():
         p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
     if hasattr(p, "adaptiveThreshConstant"):
         p.adaptiveThreshConstant = 7
+    # NEW tolerances
+    if hasattr(p, "minMarkerPerimeterRate"): p.minMarkerPerimeterRate = 0.02
+    if hasattr(p, "maxMarkerPerimeterRate"): p.maxMarkerPerimeterRate = 4.0
+    if hasattr(p, "adaptiveThreshWinSizeMin"): p.adaptiveThreshWinSizeMin = 3
+    if hasattr(p, "adaptiveThreshWinSizeMax"): p.adaptiveThreshWinSizeMax = 23
     return p
-
 class _ArucoCompatDetector:
     """Wrapper that uses cv2.aruco’s APIs and returns {id: 4x2 corners}."""
     def __init__(self):
@@ -70,6 +77,8 @@ class _ArucoCompatDetector:
     def detect(self, gray):
         if self._new:
             corners, ids, _ = self._det.detectMarkers(gray)
+            # print(f"Detected {0 if ids is None else len(ids)} markers")
+            # print(ids)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._dict, parameters=self._params)
         id_map: Dict[int, np.ndarray] = {}
@@ -78,12 +87,25 @@ class _ArucoCompatDetector:
                 id_map[int(i)] = c.reshape(-1, 2).astype(np.float32)
         return id_map
 
+def _conf_from_visibility(found_corners: int, total: int = 4) -> float:
+    """
+    0.0 if <3 corners; otherwise linear with count.
+    3/4 -> 0.75, 4/4 -> 1.0
+    """
+    if found_corners < 3:
+        return 0.0
+    return min(1.0, found_corners / float(total))
+
 class BoardCalibrator:
     """Finds board corner markers, estimates image→board homography, and scores calibration quality."""
     def __init__(self, cam: Optional[CameraModel] = None):
         self.det = _ArucoCompatDetector()
         self.cam = cam or CameraModel()
         self.board_pose: Optional[BoardPose] = None
+        self.pose_fresh: bool = False  
+    def _center_from_quad(self, tl, tr, br, bl) -> Tuple[float, float]:
+        c = 0.25 * (tl + tr + br + bl)
+        return float(c[0]), float(c[1])
 
     def _undistort(self, frame_bgr):
         if self.cam.K is None or self.cam.dist is None:
@@ -110,21 +132,23 @@ class BoardCalibrator:
             out["TR"] = out["TL"] + (out["BR"] - out["BL"])
         elif have >= {"TR", "BR", "TL"} and "BL" not in have:
             out["BL"] = out["TL"] + (out["BR"] - out["TR"])
+        elif have >= {"TR", "BR", "BL"} and "TL" not in have:
+            out["TL"] = out["BL"] + (out["TR"] - out["BR"])
         return out
-
     @staticmethod
     def _reproj_error(H: np.ndarray, img_pts: np.ndarray, dst_pts: np.ndarray) -> float:
         proj = cv2.perspectiveTransform(img_pts[None].astype(np.float32), H)[0]
         return float(np.mean(np.linalg.norm(proj - dst_pts.astype(np.float32), axis=1)))
 
     def calibrate(self, frame_bgr) -> Optional[BoardPose]:
-        """Compute and cache image→board homography from a BGR frame; returns the new pose or last good one."""
+        """Compute and cache image→board homography; confidence = visibility only."""
+        self.pose_fresh = False  # reset; set True only if we accept a new pose
+
         frame_bgr = self._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-
         id_map = self.det.detect(gray)
-        # print("Detected markers:", list(id_map.keys()))
         cs = self._collect_corners(id_map)
+        print("Calibrating, found corners:", id_map.keys(), cs.keys())
 
         if len(cs) < 3:
             return self.board_pose
@@ -134,36 +158,61 @@ class BoardCalibrator:
 
         tl, tr, br, bl = cs["TL"], cs["TR"], cs["BR"], cs["BL"]
         img_pts = np.array([tl, tr, br, bl], dtype=np.float32)
-
         width_px  = max(float(np.linalg.norm(tr - tl)), 1e-6)
         height_px = max(float(np.linalg.norm(bl - tl)), 1e-6)
-        # board_rect = np.array(
-        #     [[0.0, 0.0], [width_px, 0.0], [width_px, height_px], [0.0, height_px]],
-        #     dtype=np.float32
-        # )
         board_rect = np.array(
-            [[0.0, height_px], [width_px, height_px], [width_px, 0.0], [0.0, 0.0]],
+            [[0.0, 0.0], [width_px, 0.0], [width_px, height_px], [0.0, height_px]],
             dtype=np.float32
         )
 
-        H = cv2.getPerspectiveTransform(img_pts.astype(np.float32), board_rect.astype(np.float32))
+        H = cv2.getPerspectiveTransform(img_pts, board_rect)
         if H is None or abs(H[2, 2]) < 1e-12:
             return self.board_pose
         H = H / H[2, 2]
 
         reproj = self._reproj_error(H, img_pts, board_rect)
-        condH = float(np.linalg.cond(H))
-        if (reproj > 1.0) and (condH > 1e7):
-            return self.board_pose
+        found = sum(1 for k in ("TL", "TR", "BR", "BL") if k in cs)
+        conf_raw = _conf_from_visibility(found)
+        prev = self.board_pose
 
-        mm_per_px_prev = getattr(self.board_pose, "mm_per_px", None)
+        accept = True
+        if reproj > _MAX_REPROJ_ERR_PX:
+            accept = False
+
+        if prev is not None:
+            W0, H0 = prev.board_size_px
+            if W0 > 0 and H0 > 0:
+                w_jump = abs(width_px - W0) / max(W0, 1e-6)
+                h_jump = abs(height_px - H0) / max(H0, 1e-6)
+                if (w_jump > _MAX_SIZE_JUMP_FRAC) or (h_jump > _MAX_SIZE_JUMP_FRAC):
+                    accept = False
+            c_new = np.array(self._center_from_quad(tl, tr, br, bl))
+
+            try:
+                Hinv = np.linalg.inv(prev.H_img2board)
+                board_center = np.array([[0.5 * prev.board_size_px[0], 0.5 * prev.board_size_px[1]]], dtype=np.float32)[None]
+                img_center_prev = cv2.perspectiveTransform(board_center, Hinv)[0][0]
+                if float(np.linalg.norm(c_new - img_center_prev)) > _MAX_CENTER_JUMP_PX:
+                    accept = False
+            except Exception:
+                pass
+
+        prev_conf = getattr(prev, "confidence", 0.0) if prev else 0.0
+        conf_smooth = (.2 * prev_conf) + ((1.0 - .2) * conf_raw)
+
+        if not accept and prev is not None:
+            prev.confidence = float(conf_smooth)
+            return prev
+
+        mm_per_px_prev = getattr(prev, "mm_per_px", None)
         self.board_pose = BoardPose(
             H_img2board=H,
             board_size_px=(int(width_px), int(height_px)),
             mm_per_px=mm_per_px_prev,
             reproj_err_px=float(reproj),
-            confidence=float(np.clip((6.0 - reproj) / 6.0, 0.0, 1.0)),
+            confidence=float(conf_smooth),
         )
+        self.pose_fresh = True
         return self.board_pose
 
 class BotTracker:
@@ -251,11 +300,11 @@ class CVPipeline:
         if old is None:
             return new
         return a * old + (1.0 - a) * new
-    def _ema_angle(prev: float, new: float, a: float) -> float:
-        # move a fraction (1-a) toward new, with proper wrap-around
+    def _ema_angle(self, prev: float, new: float, a: float) -> float:
         d = math.atan2(math.sin(new - prev), math.cos(new - prev))
         h = prev + (1.0 - a) * d
-        return math.atan2(math.sin(h), math.cos(h))  # wrap to [-pi, pi]
+        return math.atan2(math.sin(h), math.cos(h))
+    # wrap to [-pi, pi]
     def calibrate_board(self, frame_bgr) -> bool:
         """Run a single-board calibration step from a frame; returns True if a pose is available."""
         return self.cal.calibrate(frame_bgr) is not None
@@ -301,14 +350,19 @@ class CVPipeline:
 
         _ = self.update_bot(frame_bgr)
         st = self.get_state()
-        valid = bool(
+
+        good_cal = (
             st["calibrated"]
-            and st["mm_per_px"] is not None
-            and st["bot_pose"] is not None
+            and st["board_reproj_err_px"] is not None
+            and st["board_reproj_err_px"] <= _MAX_REPROJ_ERR_PX
             and (st["board_confidence"] is None or st["board_confidence"] >= _CONF_MIN_BOARD)
-            and st["bot_pose"]["confidence"] >= _CONF_MIN_BOT
         )
+
+        good_bot = st["bot_pose"] is not None and st["bot_pose"]["confidence"] >= _CONF_MIN_BOT
+        valid = bool(good_cal and good_bot)
+
         return valid, time.monotonic() - t0
+
 
     def get_state(self):
         """Return a serializable snapshot of current calibration, scale, and (smoothed) bot pose."""
@@ -320,6 +374,7 @@ class CVPipeline:
             "board_size_px": None if bp is None else bp.board_size_px,
             "board_reproj_err_px": None if bp is None else bp.reproj_err_px,
             "board_confidence": None if bp is None else bp.confidence,
+            "board_pose_fresh": getattr(self.cal, "pose_fresh", False),
             "bot_pose": None if bot is None else {
                 "center_board_px": bot.center_board_px,
                 "heading_rad": bot.heading_rad,
@@ -337,7 +392,7 @@ class CVPipeline:
         Wpx, Hpx = st["board_size_px"]
         return mpp * float(Wpx), mpp * float(Hpx)
 
-    def fit_path_to_board(self, wps, margin_frac: float = 0.10):
+    def fit_path_to_board(self, wps, margin_frac: float = 0.05):
         """Scale/center normalized waypoints to the calibrated board."""
         sz = self.board_size_mm()
         if not sz:

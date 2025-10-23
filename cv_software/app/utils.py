@@ -45,6 +45,7 @@ class Metrics:
         self.total_frames = 0
         self.uptime_pct = 0.0
 
+
     def note(self, valid: bool, t_proc_s: float):
         """Record the processing time and update frame counts."""
         self.t_hist.append(t_proc_s)
@@ -54,11 +55,13 @@ class Metrics:
         self.uptime_pct = 100.0 * self.valid_frames / max(1, self.total_frames)
 
     def rate_hz(self) -> float:
-        """Calculate the frame processing rate in Hertz."""
-        ts = list(self.ts_hist)
-        if len(ts) < 3: return 0.0
-        dur = ts[-1] - ts[0]
-        return 0.0 if dur <= 1e-6 else float(len(ts) - 1) / float(dur)
+        """Calculate the frame processing rate in Hertz (robust to tuple/float entries)."""
+        ts_elems = list(self.ts_hist)
+        if len(ts_elems) < 3:
+            return 0.0
+        times = [(e[0] if isinstance(e, tuple) else e) for e in ts_elems] #computes num of frame / duration
+        dur = times[-1] - times[0]
+        return 0.0 if dur <= 1e-6 else float(len(times) - 1) / float(dur)
 
     def median_latency_ms(self) -> float:
         """Compute the median latency in milliseconds."""
