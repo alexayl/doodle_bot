@@ -1,4 +1,4 @@
-# Cross-platform shell configuration
+﻿# Cross-platform shell configuration
 # On Windows, use PowerShell for recipes that need it
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
@@ -132,110 +132,30 @@ test-navigation: clean
 test-app-all: test-state_machine test-instruction_parser
 
 
-# ------------------
-# Tests - Drivers
-# ------------------
-test-nrf-servo: _verify_workspace clean
+# Generic test recipe that works for both platforms
+_test_driver platform driver_name config_name: _verify_workspace clean
   west build \
     -p always \
-    -b "{{NRF_BOARD}}" \
+    -b "{{ if platform == "esp" { ESP_BOARD } else { NRF_BOARD } }}" \
     -d build \
     app \
     {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_SERVO_TEST=y
+    -D{{config_name}}=y
   west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+  python -m serial.tools.miniterm "{{ if platform == "esp" { ESP_PORT } else { NRF_PORT } }}" 115200
 
-test-nrf-led: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_LED_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
+# NRF52840 test aliases
+test-nrf-servo: (_test_driver "nrf" "servo" "CONFIG_SERVO_TEST")
+test-nrf-led: (_test_driver "nrf" "led" "CONFIG_LED_TEST")
+test-nrf-buzzer: (_test_driver "nrf" "buzzer" "CONFIG_BUZZER_TEST")
+test-nrf-stepper: (_test_driver "nrf" "stepper" "CONFIG_STEPPER_TEST")
 
-test-nrf-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_BUZZER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
-
-test-nrf-stepper: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{NRF_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_STEPPER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{NRF_PORT}}" 115200
-
-# ------------------
-# Tests - ESP32-S3
-# ------------------
-test-esp-servo: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_SERVO_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-led: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_LED_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_BUZZER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-pwm-buzzer: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_PWM_BUZZER_DRIVER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
-
-test-esp-stepper: _verify_workspace clean
-  west build \
-    -p always \
-    -b "{{ESP_BOARD}}" \
-    -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_STEPPER_TEST=y
-  west flash --build-dir build
-  python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
+# ESP32-S3 test aliases
+test-esp-servo: (_test_driver "esp" "servo" "CONFIG_SERVO_TEST")
+test-esp-led: (_test_driver "esp" "led" "CONFIG_LED_TEST")
+test-esp-buzzer: (_test_driver "esp" "buzzer" "CONFIG_BUZZER_TEST")
+test-esp-pwm-buzzer: (_test_driver "esp" "pwm-buzzer" "CONFIG_PWM_BUZZER_DRIVER_TEST")
+test-esp-stepper: (_test_driver "esp" "stepper" "CONFIG_STEPPER_TEST")
 
 # Run comprehensive peripheral demo showing all components
 demo-esp: _verify_workspace clean
