@@ -32,7 +32,6 @@ void BleService::notif_enabled(bool enabled, void *ctx) {
 void BleService::received(struct bt_conn *conn, const void *data, uint16_t len, void *ctx) {
     ARG_UNUSED(conn);
     ARG_UNUSED(ctx);
-    printk("%s() - Len: %d, Message: %.*s\n", __func__, len, len, (char *)data);
     
     // Forward to instance method if available
     if (BleService::instance) {
@@ -44,52 +43,51 @@ void BleService::received(struct bt_conn *conn, const void *data, uint16_t len, 
 /* INSTANCE METHODS */
 
 void BleService::init() {
+
     // Set static instance pointer for callbacks
     BleService::instance = this;
-    
-    // Initialize BLE service
-    int err;
 
-	printk("Sample - Bluetooth Peripheral NUS\n");
+    int err;
 
 	err = bt_nus_cb_register(&nus_listener, NULL);
 	if (err) {
-		printk("ERROR: Failed to register NUS callback: %d\n", err);
+		printk("BLE::ERROR - Failed to register NUS callback: %d\n", err);
 		return;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
-		printk("ERROR: Failed to enable bluetooth: %d\n", err);
+		printk("BLE::ERROR:Failed to enable bluetooth: %d\n", err);
 		return;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
-		printk("ERROR: Failed to start advertising: %d\n", err);
+		printk("BLE::ERROR: Failed to start advertising: %d\n", err);
 		return;
 	}
 
-	printk("Initialization complete\n");
+	printk("BLE::SUCCESS: Initialization complete\n");
 }
 
 void BleService::send(const char *data, size_t len) {
-    // Send data over BLE
+
     int err = bt_nus_send(NULL, data, len);
-    printk("Data send - Result: %d\n", err);
+    
     if (err < 0 && (err != -EAGAIN) && (err != -ENOTCONN)) {
-        printk("ERROR: Failed to send data over BLE: %d\n", err);
+        printk("BLE::ERROR: Failed to send data over BLE: %d\n", err);
+        return;
     }
+
+    printk("BLE::INFO: Data sent successfully: %s\n", data);
 }
 
 void BleService::receive(const void *data, uint16_t len) {
     
-    // If custom handler is provided, use it exclusively
     if (receiveHandler) {
         receiveHandler(data, len, navigationQueue);
         return;
+    } else {
+        printk("BLE::ERROR: No receive handler specified\n");
     }
-    
-    // Default behavior: just print
-    printk("No BLE handler specified. Received %d bytes: %.*s\n", len, len, (char*)data);
 }
