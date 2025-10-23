@@ -7,70 +7,27 @@ list(APPEND DTS_ROOT ${CMAKE_SOURCE_DIR}/..)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(doodle_bot)
 
-project(app LANGUAGES C CXX)
+# Main application sources
+file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
+target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 
-# Choose between main app sources or test applications
-if(CONFIG_LED_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/led/led_control.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
-    )
-elseif(CONFIG_BUZZER_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/buzzer/buzzer_test.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/buzzer.c
-    )
-elseif(CONFIG_PWM_BUZZER_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/buzzer/pwm_buzzer_test.cpp
-    )
-elseif(CONFIG_PWM_BUZZER_DRIVER_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/buzzer/pwm_buzzer_driver_test.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
-    )
-elseif(CONFIG_SERVO_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/servo/servo_control.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
-    )
-elseif(CONFIG_SERVO_PWM_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../pwm_test.cpp
-    )
-elseif(CONFIG_STEPPER_TEST)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/stepper/stepper_control.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
-    )
-elseif(CONFIG_PERIPHERAL_DEMO)
-    target_sources(app PRIVATE
-        ${CMAKE_SOURCE_DIR}/../tests/demo/peripheral_demo.cpp
-        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
-        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
-        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
-        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
-    )
-else()
-    file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
-    target_sources(app PRIVATE ${DOODLE_BOT_SOURCES}
-        ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
-        ${CMAKE_SOURCE_DIR}/../drivers/buzzer/buzzer.c
-        ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
-        ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
-    )
-endif()
+# Include all driver sources for main application
+target_sources(app PRIVATE 
+    ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+    ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
+    ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
+    ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
+)
 
-target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/../include)
-
-# Add DT bindings for custom drivers
-list(APPEND DTS_ROOT ${CMAKE_SOURCE_DIR}/..)
-
-# Add custom servo driver directly to the application
-if(CONFIG_SERVO)
-    target_sources(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c)
-    target_include_directories(app PRIVATE ${CMAKE_SOURCE_DIR}/../drivers/servo)
-endif()
+# Include directories
+target_include_directories(app PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    ${CMAKE_SOURCE_DIR}/../include
+    ${CMAKE_SOURCE_DIR}/../drivers/servo
+    ${CMAKE_SOURCE_DIR}/../drivers/stepper
+    ${CMAKE_SOURCE_DIR}/../drivers/buzzer
+    ${CMAKE_SOURCE_DIR}/../drivers/led
+)
 
 # Add specific flags for x86 platform to handle floating point
 if(CONFIG_X86)

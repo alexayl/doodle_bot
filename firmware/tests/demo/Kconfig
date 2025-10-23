@@ -1,0 +1,17 @@
+menu "Zephyr"
+source "Kconfig.zephyr"
+endmenu
+
+# Include driver configurations using APPLICATION_SOURCE_DIR
+source "$(APPLICATION_SOURCE_DIR)/../../drivers/Kconfig"
+
+config PERIPHERAL_DEMO
+	bool "Build peripheral demo"
+	default y
+	select SERVO
+	select STEPPER_DRIVER
+	select PWM_BUZZER
+	select SIMPLE_LED_DRIVER
+	help
+	  Comprehensive peripheral demo showing all robot components:
+	  servos, stepper motor, PWM buzzer, and LED.

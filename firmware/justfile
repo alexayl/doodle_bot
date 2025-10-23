@@ -138,7 +138,7 @@ _test_driver platform driver_name config_name: _verify_workspace clean
     -p always \
     -b "{{ if platform == "esp" { ESP_BOARD } else { NRF_BOARD } }}" \
     -d build \
-    app \
+    tests/{{driver_name}} \
     {{CMAKE_CACHE_ARGS}} \
     -D{{config_name}}=y
   west flash --build-dir build
@@ -147,13 +147,11 @@ _test_driver platform driver_name config_name: _verify_workspace clean
 # NRF52840 test aliases
 test-nrf-servo: (_test_driver "nrf" "servo" "CONFIG_SERVO_TEST")
 test-nrf-led: (_test_driver "nrf" "led" "CONFIG_LED_TEST")
-test-nrf-buzzer: (_test_driver "nrf" "buzzer" "CONFIG_BUZZER_TEST")
 test-nrf-stepper: (_test_driver "nrf" "stepper" "CONFIG_STEPPER_TEST")
 
 # ESP32-S3 test aliases
 test-esp-servo: (_test_driver "esp" "servo" "CONFIG_SERVO_TEST")
 test-esp-led: (_test_driver "esp" "led" "CONFIG_LED_TEST")
-test-esp-buzzer: (_test_driver "esp" "buzzer" "CONFIG_BUZZER_TEST")
 test-esp-pwm-buzzer: (_test_driver "esp" "pwm-buzzer" "CONFIG_PWM_BUZZER_DRIVER_TEST")
 test-esp-stepper: (_test_driver "esp" "stepper" "CONFIG_STEPPER_TEST")
 
@@ -163,9 +161,8 @@ demo-esp: _verify_workspace clean
     -p always \
     -b "{{ESP_BOARD}}" \
     -d build \
-    app \
-    {{CMAKE_CACHE_ARGS}} \
-    -DCONFIG_PERIPHERAL_DEMO=y
+    tests/demo \
+    {{CMAKE_CACHE_ARGS}}
   west flash --build-dir build
   python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
 
