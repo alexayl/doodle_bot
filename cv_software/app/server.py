@@ -5,6 +5,10 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import List, Tuple, Optional
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 import cv2
 import numpy as np
 from flask import Flask, Response, request, render_template, redirect, url_for
@@ -14,7 +18,7 @@ import faulthandler
 from app.cv_core import CVPipeline
 from app.control import PathRun, Waypoint
 from app.camera import ThreadedCamera, CameraConfig
-from app.path_parse import load_gcode_file
+from app.path_parse import load_gcode_file, convert_pathfinding_gcode
 from app.bt_link import BTLink
 from app.utils import encode_jpeg, Metrics
 
@@ -27,9 +31,12 @@ PATHFINDING_DIR = os.getenv(
     "PATHFINDING_DIR",
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "pathfinding")),
 )
-
+STREAM_JPEG_QUALITY = 75
 _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
 _MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
+
+# If you want to completely disable legacy move streaming (dx,dy,dz) and only send G-code:
+DISABLE_MOVE_STREAMING = True
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
@@ -56,7 +63,6 @@ def get_cam() -> Optional[ThreadedCamera]:
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
 bt = BTLink(port=os.getenv("BT_PORT", "/dev/ttyUSB0"), baud=int(os.getenv("BT_BAUD", "115200")))
-
 @contextmanager
 def _in_dir(path: str):
     old = os.getcwd()
@@ -159,13 +165,27 @@ def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(575
 
     return out_gcode_path
 
+def _read_gcode_text(path_or_name: str) -> str:
+    """Return G-code file contents as a UTF-8 string."""
+    if os.path.isfile(path_or_name):
+        p = path_or_name
+    else:
+        p = os.path.join(PATHFINDING_DIR, f"{path_or_name}.gcode")
+        if not os.path.isfile(p):
+            p = os.path.join(PATHFINDING_DIR, "gcode", f"{path_or_name}.gcode")
+    if not os.path.isfile(p):
+        raise FileNotFoundError(f"G-code not found: {path_or_name}")
+    with open(p, "r", encoding="utf-8") as f:
+        return f.read()
+
 # -----------------------------------------------------------------------------#
-# CV worker; Bluetooth sending of (dx,dy,dz) packets)
+# CV worker (kept for metrics/overlay). Optional legacy move streaming gated.
 # -----------------------------------------------------------------------------#
 _cv_thread: Optional[threading.Thread] = None
 
 def _clamp(v: float, m: float) -> float:
     return -m if v < -m else (m if v > m else v)
+
 def _process_frame_once(frame) -> tuple[bool, float]:
     t0 = time.perf_counter()
     try:
@@ -182,7 +202,6 @@ def _process_frame_once(frame) -> tuple[bool, float]:
             valid = False
     return bool(valid), (time.perf_counter() - t0)
 
-
 def _cv_worker():
     try:
         bt.connect()
@@ -193,7 +212,6 @@ def _cv_worker():
     batch_vertices = 12
     idle_timeout_s = 1.0
 
-    # pen state we mirror to firmware via dz flags
     pen_is_down = False
     sent_initial_pen = False
 
@@ -211,11 +229,12 @@ def _cv_worker():
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
 
-        if RUN.active:
+        # Legacy incremental streaming (optional). Leave enabled = False when sending raw G-code instead.
+        if RUN.active and not DISABLE_MOVE_STREAMING:
             bt.wait_idle(idle_timeout_s)
 
             pose = cvp.get_pose_mm()
-            verts: List[Tuple[float, float, int]] = []  # (dx,dy,dz)
+            verts: List[Tuple[float, float, int]] = []
             for _ in range(batch_vertices):
                 step = RUN.follower.step(pose)  # (fwd, left) in ROBOT frame
                 if step is None:
@@ -226,7 +245,6 @@ def _cv_worker():
                     sent_initial_pen = False
                     break
 
-                # CV correction in BOARD mm, rotate ROBOT
                 st = cvp.get_state()
                 ok_conf = (
                     st["calibrated"]
@@ -251,8 +269,6 @@ def _cv_worker():
                     sent_initial_pen = True
 
                 verts.append((float(step[0]), float(step[1]), dz))
-
-                # refresh pose for next iteration
                 pose = cvp.get_pose_mm()
 
             if verts:
@@ -269,6 +285,9 @@ def _ensure_cv_thread():
         _cv_thread = threading.Thread(target=_cv_worker, daemon=True)
         _cv_thread.start()
 
+# -----------------------------------------------------------------------------#
+# Overlay/Stream
+# -----------------------------------------------------------------------------#
 def overlay_fn():
     def _draw(frame):
         st = cvp.get_state()
@@ -342,6 +361,7 @@ def erase():
             except: pass
             return redirect(url_for("erase"))
 
+        # 1) Build normalized path for local preview/control (unchanged)
         raw_norm = _load_named_gcode_normalized("erase")
         if not raw_norm:
             error = "No erase path found in pathfinding directory."
@@ -350,9 +370,18 @@ def erase():
             if not fitted:
                 error = "Board not calibrated yet."
             else:
+                try:
+                    gcode_str = _read_gcode_text("erase")
+                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
+                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
+                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
+
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
-                msg = f"Erase queued with {len(fitted)} vertices."
+                msg = f"Erase queued with {len(fitted)} vertices and sent over BLE."
+
         return render_template("index.html", page="erase", msg=msg, error=error)
 
     return render_template("index.html", page="erase", msg=msg, error=error)
@@ -373,6 +402,7 @@ def draw():
 
         uploaded_file = request.files.get("file")
         raw_norm: List[Waypoint] = []
+        gcode_path: Optional[str] = None
 
         if uploaded_file and uploaded_file.filename:
             fname = secure_filename(uploaded_file.filename)
@@ -381,8 +411,8 @@ def draw():
             STATE["target_image"] = fname
             try:
                 base = os.path.splitext(fname)[0]
-                out_gcode = os.path.join("uploads", f"{base}.gcode")
-                gcode_path = _convert_image_to_gcode(img_path, out_gcode, canvas_size=(575, 730))
+                gcode_path = os.path.join("uploads", f"{base}.gcode")
+                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(575, 730))
                 ops = load_gcode_file(gcode_path)
                 raw_norm = _ops_to_normalized_wps(ops)
             except Exception as e:
@@ -402,9 +432,19 @@ def draw():
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
             else:
+                # Send raw G-code to MCU (use generated file if present, else named fallback)
+                try:
+                    src_for_gcode = gcode_path if gcode_path else "draw"
+                    gcode_str = _read_gcode_text(src_for_gcode)
+                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
+                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
+                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
+
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
-                msg = f"Draw queued with {len(fitted)} vertices."
+                msg = f"Draw queued with {len(fitted)} vertices and sent over BLE."
 
         return render_template("index.html", page="draw",
                                has_target=bool(STATE["target_image"]),
@@ -422,7 +462,6 @@ def stream():
     q = max(40, min(q, 80))
     return Response(gen_frames(overlay_fn, quality=q),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
-
 
 def _shutdown():
     try:

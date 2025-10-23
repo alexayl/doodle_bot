@@ -98,6 +98,40 @@
           </aside>
         </div>
       </section>
+      {% elif page == 'spec2' %}
+  <section class="panel">
+    <div class="panel-hd">
+      <div class="title">Spec2: RMS Reduction Demo</div>
+      <div class="sub">Start the spiral path → watch live overlay + chart</div>
+    </div>
+    <div class="panel-bd grid grid-2">
+      <div>
+        {% if msg %}<div class="alert" role="status">{{ msg }}</div>{% endif %}
+        {% if error %}<div class="alert" role="alert">⚠ {{ error }}</div>{% endif %}
+
+        <div class="row" style="margin-bottom:10px">
+          <form method="post" action="{{ url_for('spec2_start') }}"><button class="btn">Start Spec2 (Spiral)</button></form>
+          <form method="post" action="{{ url_for('spec2_stop') }}"  style="margin-left:8px"><button class="btn secondary">Stop</button></form>
+          <form method="post" action="{{ url_for('spec2_reset') }}" style="margin-left:8px"><button class="btn ghost">Reset Stats</button></form>
+          <a class="btn ghost" href="{{ url_for('spec2_png') }}" style="margin-left:8px" target="_blank" rel="noreferrer">Open Chart</a>
+        </div>
+
+        <div class="stream-wrap">
+          <img class="stream-aspect" src="{{ url_for('stream') }}?mode=spec2" alt="Live stream"/>
+        </div>
+        <p class="note">HUD shows RMS reduction and path length; the chart at <code>/spec2.png</code> plots baseline vs corrected error.</p>
+      </div>
+
+      <aside>
+        <div class="kicker">What to look for</div>
+        <ul class="help" style="margin:6px 0 0; padding-left:18px; line-height:1.5">
+          <li>Spiral is fitted inside board margins (mock board if not calibrated).</li>
+          <li>Red = baseline (no CV), Yellow = corrected, Green = GT (sim).</li>
+          <li>Spec2 passes when ΔRMS ≥ 3 mm over ≥ 3 m distance.</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
 
       {% elif page == 'draw' %}
       <section class="panel">
@@ -118,7 +152,7 @@
               </label>
               <button type="submit" class="btn">Upload & Start</button>
             </form>
-    
+
             {% if has_target %}
               <p class="help" style="margin-top:-4px">Loaded: <strong>{{ target }}</strong></p>
             {% endif %}

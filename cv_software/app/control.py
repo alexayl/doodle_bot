@@ -12,7 +12,11 @@ class Waypoint:
 @dataclass
 class FollowerParams:
     pos_eps_mm: float = 2.0
+    # legacy magnitude clamp
     max_step_mm: float = 25.0
+    # NEW: anisotropic caps in ROBOT frame (forward/left)
+    max_step_forward_mm: float = 25.0
+    max_step_left_mm: float = 12.0   # give Y/left less if you want tighter control
 
 class PathFollower:
     """
@@ -41,10 +45,6 @@ class PathFollower:
 
     def total(self) -> int:
         return len(self._wps)
-    def current_target(self) -> Optional[Waypoint]:
-        if not self.active or self._i >= len(self._wps):
-            return None
-        return self._wps[self._i]
 
     def current_target(self) -> Optional[Waypoint]:
         if not self.active or self._i >= len(self._wps):
@@ -57,18 +57,26 @@ class PathFollower:
         (x, y), _, _ = pose
         while self._i < len(self._wps):
             tgt = self._wps[self._i]
-            if math.hypot(tgt.x_mm - x, tgt.y_mm - y) <= self.p.pos_eps_mm:
-                self._i += 1
-            else:
-                break
+            ex, ey = (tgt.x_mm - x), (tgt.y_mm - y)
+            dist = math.hypot(ex, ey)
 
-    # single source of truth for (ex, ey) to current target ---
+            if dist <= self.p.pos_eps_mm:
+                self._i += 1
+                continue
+            # If there's a "next" waypoint, project onto the current segment
+            if self._i + 1 < len(self._wps):
+                nxt = self._wps[self._i + 1]
+                vx, vy = (nxt.x_mm - tgt.x_mm), (nxt.y_mm - tgt.y_mm)
+                seg_len = math.hypot(vx, vy) or 1.0
+                ux, uy = (vx / seg_len), (vy / seg_len)
+                along = ex * ux + ey * uy     # signed along-track error
+                cross = abs(-ex * uy + ey * ux)  # cross-track magnitude
+                if along <= self.p.pos_eps_mm and cross <= 5.0 * self.p.pos_eps_mm:
+                    self._i += 1
+                    continue
+            break
+
     def current_error(self, pose: Tuple[Tuple[float, float], float, float]) -> Optional[Tuple[float, float, Waypoint]]:
-        """
-        Returns (ex, ey, tgt) where error is in BOARD mm from current pose to
-        the current target waypoint, or None if inactive / done.
-        Does NOT advance the index on its own.
-        """
         if not self.active or self._i >= len(self._wps):
             return None
         (x, y), _, _ = pose
@@ -103,13 +111,21 @@ class PathFollower:
             if self._i >= len(self._wps):
                 self.stop()
                 return None
-            # recompute on next tick
             return None
 
         step_len = min(self.p.max_step_mm, dist)
         ux, uy = ex / dist, ey / dist
         (_, heading, _) = pose
-        return self._to_robot_frame(ux * step_len, uy * step_len, heading)
+
+        # Rotate to robot frame, then apply anisotropic caps
+        fwd, left = self._to_robot_frame(ux * step_len, uy * step_len, heading)
+
+        # anisotropic clamp (robot frame)
+        fwd = max(-self.p.max_step_forward_mm, min(self.p.max_step_forward_mm, fwd))
+        left = max(-self.p.max_step_left_mm,   min(self.p.max_step_left_mm,   left))
+
+        return (fwd, left)
+
 
 
 class PathRun:
