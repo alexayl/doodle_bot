@@ -17,7 +17,6 @@ _SCAN_SECS = float(os.getenv("BT_SCAN_SECONDS", "8"))
 class BTLink:
     """Minimal BLE (Nordic UART) transport with packet-ID prefix for each line."""
 
-    # Kept for compatibility with your code and firmware
     HDR_MOVES  = 0xA1
     HDR_STATUS = 0x55
     HDR_ACK    = 0xAA
@@ -93,12 +92,12 @@ class BTLink:
         self,
         gcode_str: str,
         *,
-        chunk_bytes: int = 120,         # unused here; left for signature compatibility
+        chunk_bytes: int = 120,
         inter_chunk_s: float = 0.015,   # small pacing
         eol: str = "\n",
         write_with_response: bool = False,
-        wait_for_ack: bool = False,     # you pass False in current app
-        max_retries: int = 3,           # used only if wait_for_ack=True
+        wait_for_ack: bool = False,
+        max_retries: int = 3,
     ) -> None:
         """Line-oriented G-code with packet-id as the first byte, like your test script."""
         if not gcode_str or not self._connected:
@@ -256,7 +255,6 @@ class BTLink:
             else:
                 raise
 
-    # Notification handler: first byte is packet-id, remainder is text (e.g., "ok")
     def _on_notify(self, _uuid: str, data: bytearray):
         self._rx_time = time.time()
         self._rx_flag = True
