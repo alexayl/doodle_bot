@@ -66,10 +66,11 @@ def simulate_differential_drive(left_velocities, right_velocities, wheel_radius,
     headings = [theta]
     
     for v_left, v_right in zip(left_velocities, right_velocities):
-        # Convert velocities to linear velocities (assuming velocity units are proportional to distance)
-        # For simplicity, treat velocity values as distance per time step
-        v_l = v_left * wheel_radius * dt / 255.0  # normalize by max velocity
-        v_r = v_right * wheel_radius * dt / 255.0
+        # Velocities are already in units proportional to distance
+        # Just scale by wheel radius and time step
+        # Don't normalize by 255 - use the actual signed values
+        v_l = v_left * wheel_radius * dt / 1000.0  # scale factor for visualization
+        v_r = v_right * wheel_radius * dt / 1000.0
         
         # Differential drive kinematics
         # Linear velocity of the robot center
@@ -92,9 +93,11 @@ def simulate_differential_drive(left_velocities, right_velocities, wheel_radius,
             icc_x = x - R * np.sin(theta)
             icc_y = y + R * np.cos(theta)
             
-            # Update position
-            x = np.cos(omega) * (x - icc_x) - np.sin(omega) * (y - icc_y) + icc_x
-            y = np.sin(omega) * (x - icc_x) + np.cos(omega) * (y - icc_y) + icc_y
+            # Update position (save old values first!)
+            x_old = x
+            y_old = y
+            x = np.cos(omega) * (x_old - icc_x) - np.sin(omega) * (y_old - icc_y) + icc_x
+            y = np.sin(omega) * (x_old - icc_x) + np.cos(omega) * (y_old - icc_y) + icc_y
             theta += omega
         
         x_positions.append(x)

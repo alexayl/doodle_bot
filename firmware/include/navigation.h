@@ -6,8 +6,8 @@
 #define DEBUG_NAV
 
 #define PI 3.14159265359
-#define WHEEL_RADIUS            (2.5) // radius of the wheels on each stepper motor
-#define DOODLEBOT_RADIUS        (15) // distance from center of doodlebot to wheel
+#define WHEEL_RADIUS            (10) // radius of the wheels on each stepper motor
+#define DOODLEBOT_RADIUS        (20) // distance from center of doodlebot to wheel
 #define STEPPER_CTRL_FREQ       (20) // occurrences / SEC
 #define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ) // seconds per occurrence
 
@@ -46,6 +46,7 @@ public:
     int consumeInstruction(const InstructionParser::GCodeCmd &) override;
 
     static void motor_control_handler(k_timer *timer);
+    static void reset_state();  // Reset robot state (heading, position, etc.)
 
 private:
     static k_msgq *nav_queue_;   // r, theta

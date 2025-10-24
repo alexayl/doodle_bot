@@ -202,8 +202,7 @@ static void navigation_before(void *fixture) {
     k_msgq_purge(&step_cmd_msgq);
     
     // Reset robot state for fresh test
-    // Note: We'd need to expose theta_current or add a reset command
-    // For now, tests should account for accumulated state
+    MotionPlanner::reset_state();
 }
 
 ZTEST_SUITE(navigation_thread, NULL, navigation_setup, navigation_before, NULL, NULL);

@@ -151,6 +151,13 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
 
 }
 
+void MotionPlanner::reset_state() {
+    theta_current = 0.0f;
+    #ifdef DEBUG_NAV
+    printk("MotionPlanner: State reset\n");
+    #endif
+}
+
 
 /* SERVO */
 
