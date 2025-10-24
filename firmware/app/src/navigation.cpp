@@ -35,10 +35,10 @@ void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
         PeripheralMover eraser;
 
         // command router
-        if(code == 'G' && num == '1') {
+        if(code == 'G' && num == 1) {
             navigator.consumeInstruction();
 
-        } else if (code == 'M' && num == '280') {
+        } else if (code == 'M' && num == 280) {
             if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 0) {
                 marker.consumeInstruction();
                 
