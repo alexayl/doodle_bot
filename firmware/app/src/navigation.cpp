@@ -10,6 +10,9 @@ float MotionPlanner::theta_current = 0.0f;
 k_msgq* MotionPlanner::nav_queue_ = nullptr;
 k_msgq* MotionPlanner::step_queue_ = nullptr;
 
+Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
+Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
+
 /* MOTION PLANNER */
 
 int MotionPlanner::interpolate() {
@@ -140,15 +143,19 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
     // get step command
     StepCommand step_command;
     if (!k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+        stepper_left_.stop();
+        stepper_right_.stop();
         k_timer_stop(&motor_control_timer);
         return;
     }
 
     // call stepper driver at specified velocity
-    // TODO: call stepper driver
+    #ifdef DEBUG_NAV
     printk("Stepper command: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
-    
+    #endif
 
+    stepper_left_.setVelocity(step_command.left_velocity);
+    stepper_right_.setVelocity(step_command.right_velocity);
 }
 
 void MotionPlanner::reset_state() {
@@ -180,8 +187,8 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
 
     // Create handler objects once, before the loop
     MotionPlanner motionPlanner(nav_cmd_msgq, step_cmd_msgq);
-    ServoMover marker;
-    ServoMover eraser;
+    ServoMover marker("servom");  // servo marker
+    ServoMover eraser("servoe");  // servo eraser
 
     while(1) {
         // Block until message arrives
@@ -206,7 +213,7 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
                 eraser.consumeInstruction(current_instruction);
 
             } else {
-                printk("Unhandled servo command: %c %d\n", current_instruction.args[0].letter, current_instruction.args[0].value);
+                printk("Unhandled servo command: %c %f\n", current_instruction.args[0].letter, (double)current_instruction.args[0].value);
             }
 
         } else {

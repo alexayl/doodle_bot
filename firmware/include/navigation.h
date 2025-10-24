@@ -52,6 +52,9 @@ private:
     static k_msgq *nav_queue_;   // r, theta
     static k_msgq *step_queue_;  // vL, vR
 
+    static Stepper stepper_left_;
+    static Stepper stepper_right_;
+
     // interpolation
     static float theta_current;
 
@@ -61,6 +64,7 @@ private:
 
 class ServoMover : public InstructionHandler {
 public:
+    ServoMover(const char* servo_alias) : servo_(servo_alias) {}
     int consumeInstruction(const InstructionParser::GCodeCmd &) override;
 
 protected:
