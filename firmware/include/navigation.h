@@ -6,10 +6,10 @@
 #define DEBUG_NAV
 
 #define PI 3.14159265359
-#define WHEEL_RADIUS            (-1)
-#define DOODLEBOT_RADIUS        (-1)
+#define WHEEL_RADIUS            (2.5) // radius of the wheels on each stepper motor
+#define DOODLEBOT_RADIUS        (15) // distance from center of doodlebot to wheel
 #define STEPPER_CTRL_FREQ       (20) // occurrences / SEC
-#define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ)  
+#define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ) // seconds per occurrence
 
 extern k_timer motor_control_timer;
 
@@ -20,8 +20,8 @@ struct NavCommand {
 };
 
 struct StepCommand {
-    uint8_t left_velocity;
-    uint8_t right_velocity;
+    int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
+    int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
 };
 
 /* Functions */

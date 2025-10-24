@@ -11,7 +11,7 @@
 
 #define MESSAGES_PER_QUEUE 100
 
-K_MSGQ_DEFINE(nav_instr_queue, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
+K_MSGQ_DEFINE(gcode_cmd_msgq, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
 K_MSGQ_DEFINE(nav_cmd_msgq, sizeof(NavCommand), MESSAGES_PER_QUEUE, alignof(NavCommand));
 K_MSGQ_DEFINE(step_cmd_msgq, sizeof(StepCommand), MESSAGES_PER_QUEUE, alignof(StepCommand));
 
@@ -58,11 +58,11 @@ int main(void) {
     
     /* Start threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
-                    comms_thread, &nav_instr_queue, NULL, NULL,
+                    comms_thread, &gcode_cmd_msgq, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_create(&nav_thread_data, nav_stack, STACK_SIZE,
-                    nav_thread, &nav_instr_queue, &nav_cmd_msgq, &step_cmd_msgq,
+                    nav_thread, &gcode_cmd_msgq, &nav_cmd_msgq, &step_cmd_msgq,
                     NAV_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_create(&state_thread_data, state_stack, STACK_SIZE,

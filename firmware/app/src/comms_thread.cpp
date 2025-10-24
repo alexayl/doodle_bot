@@ -60,9 +60,9 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
 }
 
-void comms_thread(void *nav_instr_queue_void, void *arg2, void *arg3) {
+void comms_thread(void *gcode_cmd_msgq_void, void *arg2, void *arg3) {
 
-    k_msgq *q = static_cast<k_msgq *>(nav_instr_queue_void);
+    k_msgq *q = static_cast<k_msgq *>(gcode_cmd_msgq_void);
 
     BleService bleService(q, gcode_to_nav_handler);
     g_bleService = &bleService; // TODO: add ownership to this pointer
