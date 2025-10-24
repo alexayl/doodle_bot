@@ -6,9 +6,7 @@
 #include <zephyr/bluetooth/services/nus.h>
 #include <zephyr/sys/printk.h>
 
-//------------------
-// BLE_SERVICE
-// -----------------
+// #define	 DEBUG_BLE
 
 // Function pointer type for receive handler
 typedef void (*ReceiveHandler)(const void* data, uint16_t len, k_msgq *q);
@@ -16,32 +14,40 @@ typedef void (*ReceiveHandler)(const void* data, uint16_t len, k_msgq *q);
 class BleService {
 public:
 	/**
-	 * Constructor with both queue and handler injection
-	 * @param nav_queue Message queue for navigation instructions
-	 * @param handler Function pointer to handle received data
+	 * @brief Constructor
+	 * @param nav_queue Message queue for navigation instructions.
+	 * @param handler Function pointer to handle received data.
 	 */
-	BleService(k_msgq* nav_queue, ReceiveHandler handler = nullptr) 
+	BleService(k_msgq* nav_queue, ReceiveHandler handler) 
 		: navigationQueue(nav_queue), receiveHandler(handler) {}
 
 	/**
-	 * init - performs hardware initialization and links handlers to service.
+	 * @brief Initializes the NUS server and BLE service.
 	 */
 	void init();
 
 	/**
-	 * send - advertises inputted message (tx characteristic)
+	 * @brief Sends data over the BLE connection (tx characteristic)
+	 * @param data Pointer to the data to send.
+	 * @param len Length of the data to send.
+	 * 
+	 * TODO: Could be extended to support std::string
 	 */
-    void send(const char *data, size_t len);
-
+    void send(const char *data, size_t len); 
+	
 	/**
-	 * receieve - called when new message received (rx characteristic)
+	 * @brief Called when new message received (rx characteristic) and maps it
+	 * to the receive handler.
+	 * 
+	 * @param data Pointer to the received data.
+	 * @param len Length of the received data.
 	 */
     void receive(const void *data, uint16_t len);
 
 private:
-	// Instance members for dependency injection
-	k_msgq* navigationQueue;      // Queue for navigation instructions
-	ReceiveHandler receiveHandler; // Custom handler function
+	// Instance members for handling message I/O
+	k_msgq* navigationQueue;		///< Message queue for passing navigation instructions
+	ReceiveHandler receiveHandler;	///< Custom handler function to process received BLE data
 
 	// Static members for BLE service
     static constexpr const char* DEVICE_NAME = "DOODLEBOT";

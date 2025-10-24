@@ -6,7 +6,6 @@
 #include "comms_thread.h"
 #include "navigation.h"
 #include "state_task.h"
-// #include "ui.h"
 
 /* QUEUE MANAGEMENT */
 
@@ -30,11 +29,27 @@ static struct k_thread comms_thread_data;
 static struct k_thread nav_thread_data;
 static struct k_thread state_thread_data;
 
+/* HARDWARE INITIALIZATION */
+
+static int hardware_init() {
+   
+    // TODO: init hardware peripherals as they are added
+    
+    return 0;
+}
+
+/* MAIN FUNCTION */
+
 int main(void) {
 
-    printk("Doodle Bot Firmware Starting...\n");
+    int ret = hardware_init();
+    if (ret < 0)
+    {
+        printk("ERROR: Hardware initialization failed\n");
+    }
     
-    /* Start background threads */
+    
+    /* Start threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
                     comms_thread, &nav_instr_queue, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);

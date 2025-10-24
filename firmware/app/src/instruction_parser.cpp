@@ -1,11 +1,14 @@
 #include "instruction_parser.h"
 #include <zephyr/sys/printk.h>
+#include <errno.h>
 
 //-------------------------
 // INSTRUCTION PARSING
 // ------------------------
 
-bool InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
+// TODO: Make the language supported more modular
+// Don't hardcode expected character and numbers
+int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     outCmd = {}; // reset
     const char* ptr = line;
 
@@ -13,24 +16,28 @@ bool InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     while (isspace(*ptr)) ptr++;
 
     // find and validate packet id
-    if ((uint8_t)*ptr++ == packet_id) {
-        packet_id++;
+    uint8_t packet_id = (uint8_t)*ptr;
+    if (packet_id == expected_packet_id) {
+        expected_packet_id++; // increment if successful
     } else {
-        printk("Packet ID mismatch: expected %d, got %d\n", packet_id, (uint8_t)*(ptr-1));
-        return false;
+        printk("Packet ID mismatch: expected %d, got %d\n", expected_packet_id, packet_id);
+        return -EINVAL;
     }
 
-    // first char must be G or M
+    ptr++;
+
+    // skip whitespace after packet id
+    while (isspace(*ptr)) ptr++;
+
+    // validate command code
     outCmd.code = toupper(*ptr++);
     if (outCmd.code != 'G' && outCmd.code != 'M') {
         printk("Invalid command code: %c\n", outCmd.code);
-        return false;
+        return -EINVAL;
     }
 
-    // read the numeric command number (e.g. 0, 91, 280)
+    // read the numeric command number and advance pointer
     outCmd.number = atoi(ptr);
-
-    // skip numeric part
     while (isdigit(*ptr)) ptr++;
     outCmd.argc = 0;
 
@@ -47,13 +54,15 @@ bool InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
         if (*ptr == '-' || *ptr == '+') ptr++;
         while (isdigit(*ptr) || *ptr == '.') ptr++;
     }
-    return true;
+    
+    // validate that the command is supported
+    return isSupported(outCmd);
 }
 
-bool InstructionParser::isSupported(const GCodeCmd& cmd) {
+int InstructionParser::isSupported(const GCodeCmd& cmd) {
     if (cmd.code == 'G' && (cmd.number == 91 || cmd.number == 0))
-        return true;
+        return 0;
     if (cmd.code == 'M' && cmd.number == 280)
-        return true;
-    return false;
+        return 0;
+    return -EINVAL;
 }
