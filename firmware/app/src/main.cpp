@@ -29,7 +29,25 @@ static struct k_thread comms_thread_data;
 static struct k_thread nav_thread_data;
 static struct k_thread state_thread_data;
 
+/* HARDWARE INITIALIZATION */
+
+static int hardware_init() {
+   
+    // TODO: init hardware peripherals as they are added
+    
+    return 0;
+}
+
+/* MAIN FUNCTION */
+
 int main(void) {
+
+    int ret = hardware_init();
+    if (ret < 0)
+    {
+        printk("ERROR: Hardware initialization failed\n");
+    }
+    
     
     /* Start threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
