@@ -10,6 +10,9 @@ float MotionPlanner::theta_current = 0.0f;
 k_msgq* MotionPlanner::nav_queue_ = nullptr;
 k_msgq* MotionPlanner::step_queue_ = nullptr;
 
+Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
+Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
+
 /* MOTION PLANNER */
 
 int MotionPlanner::interpolate() {
@@ -140,15 +143,19 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
     // get step command
     StepCommand step_command;
     if (!k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+        stepper_left_.stop();
+        stepper_right_.stop();
         k_timer_stop(&motor_control_timer);
         return;
     }
 
     // call stepper driver at specified velocity
-    // TODO: call stepper driver
+    #ifdef DEBUG_NAV
     printk("Stepper command: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
-    
+    #endif
 
+    stepper_left_.setVelocity(step_command.left_velocity);
+    stepper_right_.setVelocity(step_command.right_velocity);
 }
 
 void MotionPlanner::reset_state() {
