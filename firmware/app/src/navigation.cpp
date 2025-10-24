@@ -187,8 +187,8 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
 
     // Create handler objects once, before the loop
     MotionPlanner motionPlanner(nav_cmd_msgq, step_cmd_msgq);
-    ServoMover marker;
-    ServoMover eraser;
+    ServoMover marker("servom");  // servo marker
+    ServoMover eraser("servoe");  // servo eraser
 
     while(1) {
         // Block until message arrives
@@ -213,7 +213,7 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
                 eraser.consumeInstruction(current_instruction);
 
             } else {
-                printk("Unhandled servo command: %c %d\n", current_instruction.args[0].letter, current_instruction.args[0].value);
+                printk("Unhandled servo command: %c %f\n", current_instruction.args[0].letter, (double)current_instruction.args[0].value);
             }
 
         } else {

@@ -64,6 +64,7 @@ private:
 
 class ServoMover : public InstructionHandler {
 public:
+    ServoMover(const char* servo_alias) : servo_(servo_alias) {}
     int consumeInstruction(const InstructionParser::GCodeCmd &) override;
 
 protected:
