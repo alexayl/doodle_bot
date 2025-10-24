@@ -20,8 +20,6 @@ static BleService* g_bleService = nullptr;
 void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     int ret = 0;
-    bool retry = false;
-    uint8_t received_packet_id = 0;
 
     static InstructionParser parser;
     InstructionParser::GCodeCmd cmd;
@@ -32,19 +30,16 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
     ret = parser.parseLine((const char*)data, cmd);
 
     // handle failed parse
-    // TODO: make proper return codes from parseLine instead of deriving them here
-    // i.e. isSupported() is called in parseLine()
     if (ret < 0) {
         printk("Handler: Failed to parse G-code\n");
-        retry = true;
-    }
 
-    if (retry) {
         // Send NACK
-        char nack[10];
-        nack[0] = received_packet_id;
-        strcpy(&nack[1], "fail\n");
-        g_bleService->send(nack, strlen(&nack[1]) + 1);
+        char nack[sizeof("afail\n")] = "afail\n";
+        nack[0] = expected_packet_id;
+        #ifdef DEBUG_BLE
+            printk("Sending NACK: %s (id:%d)\n", nack, (uint8_t)nack[0]);
+        #endif
+        g_bleService->send(nack, sizeof(nack));
         return;
     }
 
@@ -55,10 +50,12 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     // Send ACK with packet ID as first byte
     if (g_bleService) {
-        char ack[10];
-        ack[0] = received_packet_id;  // Packet ID as first byte
-        strcpy(&ack[1], "ok\n");
-        g_bleService->send(ack, strlen(&ack[1]) + 1);
+        char ack[sizeof("aok\n")] = "aok\n";
+        ack[0] = expected_packet_id;
+        #ifdef DEBUG_BLE
+            printk("Sending ACK: %s (id:%d)\n", ack, (uint8_t)ack[0]);
+        #endif
+        g_bleService->send(ack, sizeof(ack));
     }
 
 }

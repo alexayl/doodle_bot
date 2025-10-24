@@ -6,6 +6,8 @@
 #include <zephyr/bluetooth/services/nus.h>
 #include <zephyr/sys/printk.h>
 
+// #define	 DEBUG_BLE
+
 // Function pointer type for receive handler
 typedef void (*ReceiveHandler)(const void* data, uint16_t len, k_msgq *q);
 

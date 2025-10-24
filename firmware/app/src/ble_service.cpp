@@ -26,7 +26,9 @@ struct bt_nus_cb BleService::nus_listener = {
 // Static callback implementations
 void BleService::notif_enabled(bool enabled, void *ctx) {
     ARG_UNUSED(ctx);
+    #ifdef DEBUG_BLE
     printk("%s() - %s\n", __func__, (enabled ? "Enabled" : "Disabled"));
+    #endif
 }
 
 void BleService::received(struct bt_conn *conn, const void *data, uint16_t len, void *ctx) {
@@ -51,13 +53,13 @@ void BleService::init() {
 
 	err = bt_nus_cb_register(&nus_listener, NULL);
 	if (err) {
-		printk("BLE::ERROR - Failed to register NUS callback: %d\n", err);
+		printk("BLE::ERROR: Failed to register NUS callback: %d\n", err);
 		return;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
-		printk("BLE::ERROR:Failed to enable bluetooth: %d\n", err);
+		printk("BLE::ERROR: Failed to enable bluetooth: %d\n", err);
 		return;
 	}
 
@@ -66,8 +68,9 @@ void BleService::init() {
 		printk("BLE::ERROR: Failed to start advertising: %d\n", err);
 		return;
 	}
-
+    #ifdef DEBUG_BLE
 	printk("BLE::SUCCESS: Initialization complete\n");
+    #endif
 }
 
 void BleService::send(const char *data, size_t len) {
@@ -78,8 +81,9 @@ void BleService::send(const char *data, size_t len) {
         printk("BLE::ERROR: Failed to send data over BLE: %d\n", err);
         return;
     }
-
-    printk("BLE::INFO: Data sent successfully: %s\n", data);
+    #ifdef DEBUG_BLE
+    printk("BLE::SUCCESS: Data sent successfully: %s\n", data);
+    #endif
 }
 
 void BleService::receive(const void *data, uint16_t len) {
