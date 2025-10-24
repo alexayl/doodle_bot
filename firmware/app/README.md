@@ -12,7 +12,7 @@ The application uses a threaded architecture with three main threads:
 - **Navigation Thread** (`nav_thread`) - Processes movement instructions and controls servo motors
 - **State Management Thread** (`state_thread`) - Manages overall system state and coordination
 
-Communication between threads is handled through Zephyr message queues, specifically the `nav_instr_queue` for navigation instructions.
+Communication between threads is handled through Zephyr message queues, specifically the `gcode_cmd_msgq` for navigation instructions.
 
 ## Features
 

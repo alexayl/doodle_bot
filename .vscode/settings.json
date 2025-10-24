@@ -13,7 +13,9 @@
         "system_error": "cpp",
         "regex": "cpp",
         "random": "cpp",
-        "cmath": "cpp"
+        "cmath": "cpp",
+        "condition_variable": "cpp",
+        "chrono": "cpp"
     },
     "idf.portWin": "COM7",
 }
