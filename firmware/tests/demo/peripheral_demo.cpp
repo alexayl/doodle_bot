@@ -366,7 +366,7 @@ static void test_stepper(void)
     
     stepper_start_counting(360.0f);
     stepper_set_velocity(STEPPER_LEFT, 360.0f);  // 1 rev/s
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(1000));  // Run for 1.2 seconds to ensure full rotation
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     
@@ -385,7 +385,7 @@ static void test_stepper(void)
     printk("\nTest 2: 360° Backward (counter-clockwise)\n");
     stepper_start_counting(360.0f);
     stepper_set_velocity(STEPPER_LEFT, -360.0f);  // 1 rev/s reverse
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(1000));  // Run for 1.2 seconds to ensure full rotation
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     

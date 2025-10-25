@@ -7,3 +7,10 @@ config BUZZER
 	help
 	  Enable simple GPIO-based buzzer control driver.
 	  Supports basic on/off and timed beep functionality.
+
+config PWM_BUZZER
+	bool "PWM Buzzer Driver"
+	depends on PWM
+	help
+	  Enable PWM-based buzzer control driver.
+	  Supports frequency control and precise tone generation.
