@@ -1,5 +1,5 @@
 /*
- * Simple stepper motor test with GPIO pulse counting
+ * Dual stepper motor test - left and right motors
  */
 
 #include <zephyr/kernel.h>
@@ -7,63 +7,85 @@
 
 int main(void)
 {
-    printk("Simple Stepper Test - GPIO Pulse Counting\n");
+    printk("Dual Stepper Motor Test\n");
+    printk("=======================\n");
 
-    // Initialize stepper
+    // Initialize stepper system
     int ret = stepper_init();
     if (ret != 0) {
         printk("ERROR: Stepper initialization failed: %d\n", ret);
         return -1;
     }
     
-    printk("Stepper motor initialized successfully\n");
+    printk("Stepper system initialized successfully\n");
+    
+    // Enable both motors
+    printk("Enabling left stepper motor...\n");
     stepper_enable(STEPPER_LEFT);
+    
+    printk("Enabling right stepper motor...\n");
+    stepper_enable(STEPPER_RIGHT);
+    
+    k_sleep(K_SECONDS(1));
 
     int cycle = 0;
     while (1) {
         cycle++;
-        printk("\n=== Cycle %d ===\n", cycle);
+        printk("\n=== Test Cycle %d ===\n", cycle);
         
-        // Reset counters before movement
-        stepper_reset_counters();
-        
-        // 90° Forward
-        printk("90° Forward (expecting 1600 GPIO pulses for 800 steps)...\n");
-        stepper_start_counting(90.0f);  // Enable step counting
-        stepper_set_velocity(STEPPER_LEFT, 90.0f);
-        k_sleep(K_SECONDS(1));
+        // Test 1: Left motor forward
+        printk("1. Left motor: 90° forward\n");
+        stepper_set_velocity(STEPPER_LEFT, 180.0f);  // 180 deg/s
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
         stepper_set_velocity(STEPPER_LEFT, 0.0f);
-        stepper_stop_counting();  // Stop step counting
-        
-        uint32_t forward_pulses = stepper_get_gpio_pulse_count();
-        uint32_t forward_steps = stepper_get_step_count();
-        printk("Forward: %d GPIO pulses, %d steps counted\n", forward_pulses, forward_steps);
-        
         k_sleep(K_SECONDS(1));
-
-        // 90° Backward  
-        printk("90° Backward (expecting another 1600 GPIO pulses)...\n");
-        uint32_t before_backward = stepper_get_gpio_pulse_count();
-        stepper_start_counting(-90.0f);  // Enable step counting for backward
-        stepper_set_velocity(STEPPER_LEFT, -90.0f);
+        
+        // Test 2: Right motor forward  
+        printk("2. Right motor: 90° forward\n");
+        stepper_set_velocity(STEPPER_RIGHT, 180.0f);  // 180 deg/s
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_RIGHT, 0.0f);
         k_sleep(K_SECONDS(1));
-        stepper_set_velocity(STEPPER_LEFT, 0.0f);
-        stepper_stop_counting();  // Stop step counting
         
-        uint32_t total_pulses = stepper_get_gpio_pulse_count();
-        uint32_t total_steps = stepper_get_total_steps();
-        uint32_t backward_pulses = total_pulses - before_backward;
+        // Test 3: Both motors forward together
+        printk("3. Both motors: 90° forward together\n");
+        stepper_set_velocity(STEPPER_BOTH, 180.0f);  // Both at 180 deg/s
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_BOTH, 0.0f);
+        k_sleep(K_SECONDS(1));
         
-        printk("Backward: %d GPIO pulses, Total: %d pulses, %d steps\n", 
-               backward_pulses, total_pulses, total_steps);
+        // Test 4: Opposite directions
+        printk("4. Opposite directions: Left forward, Right backward\n");
+        stepper_set_velocity(STEPPER_LEFT, 180.0f);   // Left forward
+        stepper_set_velocity(STEPPER_RIGHT, -180.0f); // Right backward
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_BOTH, 0.0f);     // Stop both
+        k_sleep(K_SECONDS(1));
         
-        printk("Cycle %d complete\n", cycle);
+        // Test 5: Return to home (reverse previous moves)
+        printk("5. Return to start position\n");
+        stepper_set_velocity(STEPPER_LEFT, -180.0f);  // Left backward
+        stepper_set_velocity(STEPPER_RIGHT, 180.0f);  // Right forward  
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_BOTH, 0.0f);     // Stop both
+        k_sleep(K_MSEC(500));
+        
+        stepper_set_velocity(STEPPER_BOTH, -180.0f);  // Both backward
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_BOTH, 0.0f);     // Stop both
+        k_sleep(K_MSEC(500));
+        
+        stepper_set_velocity(STEPPER_BOTH, -180.0f);  // Both backward  
+        k_sleep(K_MSEC(500));  // 500ms = 90 degrees
+        stepper_set_velocity(STEPPER_BOTH, 0.0f);     // Stop both
+        
+        printk("Cycle %d complete - both motors back to start\n", cycle);
         k_sleep(K_SECONDS(2));
         
-        // Stop after a few cycles to avoid running indefinitely
-        if (cycle >= 6) {
-            printk("Test complete - stopping\n");
-            stepper_disable(STEPPER_LEFT);
+        // Stop after a few cycles
+        if (cycle >= 3) {
+            printk("\nDual stepper test complete!\n");
+            stepper_disable(STEPPER_BOTH);
             break;
         }
     }

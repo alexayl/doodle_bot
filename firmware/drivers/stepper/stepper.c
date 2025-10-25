@@ -14,17 +14,52 @@
 
 LOG_MODULE_REGISTER(stepper, CONFIG_LOG_DEFAULT_LEVEL);
 
-/* Stepper motor from devicetree */
-#define STEPPER_NODE DT_NODELABEL(stepper_left)
+/* Stepper motor devicetree nodes */
+#define STEPPER_LEFT_NODE  DT_NODELABEL(stepper_left)
+#define STEPPER_RIGHT_NODE DT_NODELABEL(stepper_right)
 
-#if !DT_NODE_EXISTS(STEPPER_NODE)
+#if !DT_NODE_EXISTS(STEPPER_LEFT_NODE)
 #error "Stepper devicetree node 'stepper_left' not found"
 #endif
 
-/* GPIO pins */
-static const struct pwm_dt_spec step_pwm = PWM_DT_SPEC_GET(STEPPER_NODE);
-static const struct gpio_dt_spec dir_pin = GPIO_DT_SPEC_GET(STEPPER_NODE, dir_gpios);
-static const struct gpio_dt_spec en_pin = GPIO_DT_SPEC_GET(STEPPER_NODE, en_gpios);
+/* GPIO pins for left stepper (primary) */
+static const struct pwm_dt_spec step_pwm = PWM_DT_SPEC_GET(STEPPER_LEFT_NODE);
+static const struct gpio_dt_spec dir_pin = GPIO_DT_SPEC_GET(STEPPER_LEFT_NODE, dir_gpios);
+static const struct gpio_dt_spec en_pin = GPIO_DT_SPEC_GET(STEPPER_LEFT_NODE, en_gpios);
+
+/* Helper functions for motor aliasing */
+static int stepper_get_motor_pins(enum stepper_motor motor, 
+                                 const struct pwm_dt_spec **pwm,
+                                 const struct gpio_dt_spec **dir,
+                                 const struct gpio_dt_spec **en)
+{
+    static const struct pwm_dt_spec right_step_pwm = PWM_DT_SPEC_GET(STEPPER_RIGHT_NODE);
+    static const struct gpio_dt_spec right_dir_pin = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, dir_gpios);
+    static const struct gpio_dt_spec right_en_pin = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, en_gpios);
+    
+    switch (motor) {
+        case STEPPER_LEFT:
+            *pwm = &step_pwm;
+            *dir = &dir_pin;
+            *en = &en_pin;
+            return 0;
+            
+        case STEPPER_RIGHT:
+#if DT_NODE_EXISTS(STEPPER_RIGHT_NODE) && DT_NODE_HAS_STATUS(STEPPER_RIGHT_NODE, okay)
+            *pwm = &right_step_pwm;
+            *dir = &right_dir_pin;
+            *en = &right_en_pin;
+            return 0;
+#else
+            LOG_ERR("Right stepper not available in devicetree");
+            return -ENODEV;
+#endif
+            
+        default:
+            LOG_ERR("Invalid stepper motor: %d", motor);
+            return -EINVAL;
+    }
+}
 
 /* Constants for 1.8° stepper with 16x microstepping */
 #define STEPS_PER_REV 200
@@ -34,12 +69,13 @@ static const struct gpio_dt_spec en_pin = GPIO_DT_SPEC_GET(STEPPER_NODE, en_gpio
 /* Back to theoretical values */
 #define DEG_TO_STEPS (TOTAL_STEPS_PER_REV / 360.0f)  // 8.89 steps/deg
 
+/* State tracking - simplified for now, can be expanded per-motor later */
+static bool initialized = false;
+static bool left_enabled = false;
+static bool right_enabled = false;
+
 /* GPIO pulse counting for debugging */
 static uint32_t gpio_pulse_count = 0;
-
-/* State */
-static bool enabled = false;
-static bool initialized = false;
 
 /* PWM cycle tracking for precise debugging */
 static uint32_t expected_pwm_cycles = 0;
@@ -47,10 +83,8 @@ static uint32_t movement_start_time = 0;
 static uint32_t current_step_freq_hz = 0;
 static uint32_t movement_step_freq_hz = 0;  /* Frequency during movement for calculations */
 static bool step_counting_enabled = false;
-
-/* Legacy counters for compatibility */
-static uint32_t total_step_count = 0;
 static uint32_t current_movement_steps = 0;
+static uint32_t total_step_count = 0;
 static uint32_t expected_steps = 0;
 
 int stepper_init(void)
@@ -86,38 +120,107 @@ int stepper_enable(enum stepper_motor motor)
     if (!initialized) {
         stepper_init();
     }
-
-    gpio_pin_set_dt(&en_pin, 1);  // HIGH = enabled (this A4988 board)
-    enabled = true;
     
+    const struct pwm_dt_spec *pwm;
+    const struct gpio_dt_spec *dir;
+    const struct gpio_dt_spec *en;
+    
+    if (motor == STEPPER_BOTH) {
+        /* Enable both motors */
+        stepper_enable(STEPPER_LEFT);
+#if DT_NODE_EXISTS(STEPPER_RIGHT_NODE) && DT_NODE_HAS_STATUS(STEPPER_RIGHT_NODE, okay)
+        stepper_enable(STEPPER_RIGHT);
+#endif
+        return 0;
+    }
+    
+    int ret = stepper_get_motor_pins(motor, &pwm, &dir, &en);
+    if (ret < 0) {
+        return ret;
+    }
 
+    gpio_pin_set_dt(en, 1);  // HIGH = enabled (this A4988 board)
+    
+    if (motor == STEPPER_LEFT) {
+        left_enabled = true;
+    } else if (motor == STEPPER_RIGHT) {
+        right_enabled = true;
+    }
 
     return 0;
 }
 
 int stepper_disable(enum stepper_motor motor)
 {
-    /* Stop PWM */
-    pwm_set_dt(&step_pwm, 0, 0);
-    current_step_freq_hz = 0;
+    const struct pwm_dt_spec *pwm;
+    const struct gpio_dt_spec *dir;
+    const struct gpio_dt_spec *en;
     
-    gpio_pin_set_dt(&en_pin, 0);  // LOW = disabled
-    enabled = false;
+    if (motor == STEPPER_BOTH) {
+        /* Disable both motors */
+        stepper_disable(STEPPER_LEFT);
+#if DT_NODE_EXISTS(STEPPER_RIGHT_NODE) && DT_NODE_HAS_STATUS(STEPPER_RIGHT_NODE, okay)
+        stepper_disable(STEPPER_RIGHT);
+#endif
+        return 0;
+    }
+    
+    int ret = stepper_get_motor_pins(motor, &pwm, &dir, &en);
+    if (ret < 0) {
+        return ret;
+    }
+    
+    /* Stop PWM */
+    pwm_set_dt(pwm, 0, 0);
+    
+    gpio_pin_set_dt(en, 0);  // LOW = disabled
+    
+    if (motor == STEPPER_LEFT) {
+        left_enabled = false;
+    } else if (motor == STEPPER_RIGHT) {
+        right_enabled = false;
+    }
 
     return 0;
 }
 
 int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
 {
+    const struct pwm_dt_spec *pwm;
+    const struct gpio_dt_spec *dir;
+    const struct gpio_dt_spec *en;
+    
+    if (motor == STEPPER_BOTH) {
+        /* Set velocity for both motors */
+        stepper_set_velocity(STEPPER_LEFT, velocity_deg_s);
+#if DT_NODE_EXISTS(STEPPER_RIGHT_NODE) && DT_NODE_HAS_STATUS(STEPPER_RIGHT_NODE, okay)
+        stepper_set_velocity(STEPPER_RIGHT, velocity_deg_s);
+#endif
+        return 0;
+    }
+    
+    int ret = stepper_get_motor_pins(motor, &pwm, &dir, &en);
+    if (ret < 0) {
+        return ret;
+    }
+    
+    /* Check if motor is enabled */
+    bool motor_enabled = (motor == STEPPER_LEFT) ? left_enabled : right_enabled;
+    
     /* Convert deg/s to steps/s: velocity * 8.89 */
     uint32_t step_freq_hz = (uint32_t)(fabsf(velocity_deg_s) * DEG_TO_STEPS);
     bool clockwise = (velocity_deg_s >= 0);
 
     /* Set direction */
-    gpio_pin_set_dt(&dir_pin, clockwise ? 1 : 0);
+    gpio_pin_set_dt(dir, clockwise ? 1 : 0);
+    LOG_INF("Motor %d Direction set: %s (pin=%d)", motor, 
+            clockwise ? "CLOCKWISE" : "COUNTERCLOCKWISE", clockwise ? 1 : 0);
+    
+    /* Small delay to ensure direction is set before stepping starts */
+    k_usleep(10);  /* 10 microseconds delay */
 
     /* Start/stop stepping */
-    if (step_freq_hz > 0 && enabled) {
+    if (step_freq_hz > 0 && motor_enabled) {
         /* 
          * PWM generates step pulses directly:
          * - Period = 1/step_freq_hz seconds
@@ -126,16 +229,14 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
         uint32_t period_ns = 1000000000 / step_freq_hz;  /* nanoseconds for high precision */
         uint32_t pulse_ns = period_ns / 2;                /* 50% duty cycle */
         
-        current_step_freq_hz = step_freq_hz;
-        
         /* Debug: print the calculated values */
-        LOG_INF("PWM Stepper: %.1f°/s, Steps: %u Hz, Period: %u ns, Pulse: %u ns", 
-                (double)velocity_deg_s, step_freq_hz, period_ns, pulse_ns);
+        LOG_INF("PWM Stepper %d: %.1f°/s, Steps: %u Hz, Period: %u ns, Pulse: %u ns", 
+                motor, (double)velocity_deg_s, step_freq_hz, period_ns, pulse_ns);
         
         /* Set PWM with precise nanosecond timing */
-        int ret = pwm_set_dt(&step_pwm, period_ns, pulse_ns);
+        ret = pwm_set_dt(pwm, period_ns, pulse_ns);
         if (ret < 0) {
-            LOG_ERR("Failed to set PWM: %d", ret);
+            LOG_ERR("Failed to set PWM for motor %d: %d", motor, ret);
             return ret;
         }
         
@@ -146,8 +247,7 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
         }
     } else {
         /* Stop PWM */
-        pwm_set_dt(&step_pwm, 0, 0);
-        current_step_freq_hz = 0;
+        pwm_set_dt(pwm, 0, 0);
     }
 
     return 0;
@@ -160,7 +260,14 @@ int stepper_stop(enum stepper_motor motor)
 
 bool stepper_is_enabled(enum stepper_motor motor)
 {
-    return enabled;
+    if (motor == STEPPER_LEFT) {
+        return left_enabled;
+    } else if (motor == STEPPER_RIGHT) {
+        return right_enabled;
+    } else if (motor == STEPPER_BOTH) {
+        return left_enabled && right_enabled;
+    }
+    return false;
 }
 
 /* Precise PWM cycle counting functions */
