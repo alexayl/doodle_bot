@@ -1,188 +1,225 @@
 #include <zephyr/kernel.h>
+#include <math.h>
 #include "navigation.h"
 #include "instruction_parser.h"
-#include "stepper.h"
-#include "buzzer.h"
-#include <simple_led.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <math.h>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846f
-#endif
+/* STATIC MEMBERS */
+InstructionParser::GCodeCmd InstructionHandler::current_instruction_;
+float MotionPlanner::theta_current = 0.0f;
 
-/* Navigation Class Implementation */
+k_msgq* MotionPlanner::nav_queue_ = nullptr;
+k_msgq* MotionPlanner::step_queue_ = nullptr;
 
-MovementDelta Navigation::processGCodeCommand(const InstructionParser::GCodeCmd& cmd) {
-    MovementDelta delta;
+Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
+Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
+
+/* MOTION PLANNER */
+
+int MotionPlanner::interpolate() {
+
+    // Using linear interpolation
+    int x_delta = current_instruction_.args[0].value;
+    int y_delta = current_instruction_.args[1].value;
     
-    switch (cmd.code) {
-        case 'G':
-            switch (cmd.number) {
-                case 0: // Rapid move (pen up)
-                case 1: { // Linear move (pen down)
-                    delta.pen_down = (cmd.number == 1);
-                    
-                    float target_x = current_position.x;
-                    float target_y = current_position.y;
-                    
-                    // Parse X and Y coordinates from arguments
-                    for (int i = 0; i < cmd.argc; i++) {
-                        switch (cmd.args[i].letter) {
-                            case 'X':
-                                if (coordinate_mode == CoordinateMode::Absolute) {
-                                    target_x = cmd.args[i].value;
-                                } else {
-                                    target_x = current_position.x + cmd.args[i].value;
-                                }
-                                break;
-                            case 'Y':
-                                if (coordinate_mode == CoordinateMode::Absolute) {
-                                    target_y = cmd.args[i].value;
-                                } else {
-                                    target_y = current_position.y + cmd.args[i].value;
-                                }
-                                break;
-                        }
-                    }
-                    
-                    // Calculate movement delta
-                    delta.dx = target_x - current_position.x;
-                    delta.dy = target_y - current_position.y;
-                    
-                    // Update target position
-                    target_position.x = target_x;
-                    target_position.y = target_y;
-                    
-                    printk("Navigation: Move from (%.2f,%.2f) to (%.2f,%.2f), delta=(%.2f,%.2f)\n",
-                           (double)current_position.x, (double)current_position.y,
-                           (double)target_x, (double)target_y, (double)delta.dx, (double)delta.dy);
-                    break;
-                }
-                case 90: // Absolute coordinates
-                    setCoordinateMode(CoordinateMode::Absolute);
-                    printk("Navigation: Switched to absolute coordinates\n");
-                    break;
-                case 91: // Relative coordinates  
-                    setCoordinateMode(CoordinateMode::Relative);
-                    printk("Navigation: Switched to relative coordinates\n");
-                    break;
-            }
-            break;
-            
-        case 'M':
-            switch (cmd.number) {
-                case 280: { // Servo control (pen up/down)
-                    for (int i = 0; i < cmd.argc; i++) {
-                        if (cmd.args[i].letter == 'S') {
-                            // Assuming S90 = pen down, S0 = pen up
-                            bool new_pen_state = (cmd.args[i].value > 45.0f);
-                            setPenDown(new_pen_state);
-                            delta.pen_down = new_pen_state;
-                            printk("Navigation: Pen %s (S%.0f)\n", 
-                                   new_pen_state ? "DOWN" : "UP", (double)cmd.args[i].value);
-                        }
-                    }
-                    break;
-                }
-            }
-            break;
+    // calculate r
+    float r_delta = (float)sqrt(pow(x_delta, 2) + pow(y_delta, 2));
+
+    // calculate theta
+    float theta_desired = (float)atan2(y_delta, x_delta);
+
+    // calculate change in delta
+    float theta_delta = theta_desired - theta_current;
+
+    // normalize theta (-PI, PI)
+    while (theta_delta > PI) {
+        theta_delta -= 2 * PI;
+    }
+    while (theta_delta < -PI) {
+        theta_delta += 2 * PI;
     }
     
-    return delta;
+    // Update current heading after turn
+    theta_current = theta_desired;
+    
+    // Generate TWO commands: first turn in place, then move forward
+    // Command 1: Turn in place (r=0, theta=theta_delta)
+    if (fabs(theta_delta) > 0.01) {  // Only turn if angle is significant
+        NavCommand turn_command = {0.0f, theta_delta};
+        k_msgq_put(nav_queue_, &turn_command, K_FOREVER);
+    }
+    
+    // Command 2: Move forward (r=r_delta, theta=0)
+    if (r_delta > 0.01) {  // Only move if distance is significant
+        NavCommand move_command = {r_delta, 0.0f};
+        k_msgq_put(nav_queue_, &move_command, K_FOREVER);
+    }
+
+    return 0;
 }
 
-void Navigation::updatePosition(const MovementDelta& delta) {
-    // Update current position
-    current_position.x += delta.dx;
-    current_position.y += delta.dy;
+int MotionPlanner::discretize() {
+
+    // take navigation commands from nav_queue_
+    NavCommand nav_command;
+    k_msgq_get(nav_queue_, &nav_command, K_FOREVER);
+
+    #ifdef DEBUG_NAV
+    printk("discretize: r=%.2f, theta=%.2f rad (%.1f deg)\n", 
+           (double)nav_command.r, (double)nav_command.theta, 
+           (double)(nav_command.theta * 180.0 / PI));
+    #endif
+
+    // Differential drive: arc length for each wheel
+    // l_dist = distance left wheel travels = R_left * theta
+    // r_dist = distance right wheel travels = R_right * theta
+    // Where R_left/right are the radii from the ICC (instantaneous center of curvature)
     
-    // Update pen state
-    pen_is_down = delta.pen_down;
+    // For a turn by angle theta_delta and forward movement r:
+    // Left wheel:  arc = r - (theta_delta * DOODLEBOT_RADIUS)
+    // Right wheel: arc = r + (theta_delta * DOODLEBOT_RADIUS)
     
-    // If there was movement, update heading to face movement direction
-    if (delta.dx != 0.0f || delta.dy != 0.0f) {
-        float movement_heading = atan2f(delta.dx, delta.dy) * 180.0f / M_PI;
-        current_position.heading_degrees = normalize_angle(movement_heading);
-    }
+    float l_dist = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
+    float r_dist = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
     
-    printk("Navigation: Updated position to (%.2f,%.2f) @ %.1f°, pen %s\n",
-           (double)current_position.x, (double)current_position.y, (double)current_position.heading_degrees,
-           pen_is_down ? "DOWN" : "UP");
+    #ifdef DEBUG_NAV
+    printk("  l_dist=%.2f, r_dist=%.2f\n", (double)l_dist, (double)r_dist);
+    #endif
+    
+    // Convert to velocities
+    int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
+    int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
+    
+    #ifdef DEBUG_NAV
+    printk("  before clamp: left_vel=%d, right_vel=%d\n", left_vel, right_vel);
+    #endif
+    
+    // Clamp to int16_t range [-32768, 32767]
+    // In practice, we'll probably want a smaller range for safety
+    left_vel = (left_vel < -32768) ? -32768 : ((left_vel > 32767) ? 32767 : left_vel);
+    right_vel = (right_vel < -32768) ? -32768 : ((right_vel > 32767) ? 32767 : right_vel);
+    
+    StepCommand step_command = {
+        (int16_t)left_vel,
+        (int16_t)right_vel
+    };
+
+    // push wheel velocities to step_queue_
+    k_msgq_put(step_queue_, &step_command, K_FOREVER);
+
+    return 0;
 }
 
-int hardware_init() {
-    // steppers
-    if (!stepper_init()) {
-        return 1;
+int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current_instruction) {
+    int ret;
+    current_instruction_ = current_instruction;
+
+    // turn gcode into motion commands
+    ret = interpolate();
+    if (ret < 0) {
+        printk("ERROR: Interpolation not successful.\n");
+    }
+    
+    // turn motion commands into wheel velocities
+    // Process all nav commands in the queue
+    while(k_msgq_num_used_get(nav_queue_) > 0) {
+        ret = discretize();
+        if (ret < 0) {
+            printk("ERROR: Discretization not successful.\n");
+        }
     }
 
-    // servo
-    // TODO: get init from jain
-    // const struct device *servo_eraser = servo_init_by_alias
-
-    // leds
-    simple_led_init();
-    // led_driver_set(led_command_t);
-
-    // buzzer
-    buzzer_init();
+    // wheel velocities are consumed by motor_control_handler()
+    // start the timer that runs it if it is not currently running
+    if (!k_timer_remaining_ticks(&motor_control_timer)) {
+        k_timer_start(&motor_control_timer, K_FOREVER, K_SECONDS(STEPPER_CTRL_PERIOD));
+    }
     
     return 0;
 }
 
-void nav_thread(void *nav_instr_queue, void *arg2, void *arg3) {
 
-    auto *q = static_cast<k_msgq *>(nav_instr_queue);
+void MotionPlanner::motor_control_handler(k_timer *timer) {
 
-    hardware_init();
+    // get step command
+    StepCommand step_command;
+    if (!k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+        stepper_left_.stop();
+        stepper_right_.stop();
+        k_timer_stop(&motor_control_timer);
+        return;
+    }
+
+    // call stepper driver at specified velocity
+    #ifdef DEBUG_NAV
+    printk("Stepper command: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
+    #endif
+
+    stepper_left_.setVelocity(step_command.left_velocity);
+    stepper_right_.setVelocity(step_command.right_velocity);
+}
+
+void MotionPlanner::reset_state() {
+    theta_current = 0.0f;
+    #ifdef DEBUG_NAV
+    printk("MotionPlanner: State reset\n");
+    #endif
+}
+
+
+/* SERVO */
+
+int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
+
     
-    // Create navigation system
-    Navigation navigation;
-    
-    printf("Navigation thread started\n");
-    navigation.printStatus();
+    return 0;
+}
+
+
+
+/* THREAD */
+
+void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_msgq_void) {
+
+    auto *gcode_msgq = (k_msgq *)(gcode_msgq_void);
+    k_msgq *nav_cmd_msgq = (k_msgq *)(nav_cmd_msgq_void);
+    k_msgq *step_cmd_msgq = (k_msgq *)(step_cmd_msgq_void);
+    InstructionParser::GCodeCmd current_instruction;
+
+    // Create handler objects once, before the loop
+    MotionPlanner motionPlanner(nav_cmd_msgq, step_cmd_msgq);
+    ServoMover marker("servom");  // servo marker
+    ServoMover eraser("servoe");  // servo eraser
 
     while(1) {
-        InstructionParser::GCodeCmd current_instruction;
-
         // Block until message arrives
-        k_msgq_get(q, &current_instruction, K_FOREVER);
-
-        printf("Nav thread received %c%d command\n", 
-               current_instruction.code, current_instruction.number);
-
-        // Process the G-code command through navigation system
-        MovementDelta delta = navigation.processGCodeCommand(current_instruction);
+        k_msgq_get(gcode_msgq, &current_instruction, K_FOREVER);
         
-        // Execute the movement (this is where you'd interface with hardware)
-        if (delta.dx != 0.0f || delta.dy != 0.0f) {
-            printf("Executing movement: dx=%.2f, dy=%.2f, pen=%s\n",
-                   (double)delta.dx, (double)delta.dy, delta.pen_down ? "DOWN" : "UP");
-                   
-            // TODO: Interface with stepper motors
-            // stepper_move_xy(delta.dx, delta.dy);
-            
-            // TODO: Control pen servo
-            // if (delta.pen_down != navigation.isPenDown()) {
-            //     servo_set_pen(delta.pen_down);
-            // }
-            
-            // Simulate movement completion and update position
-            navigation.updatePosition(delta);
+        #ifdef DEBUG_NAV
+        printk("Nav thread received %c%d command\n", current_instruction.code, current_instruction.number);
+        #endif
+
+        char code = current_instruction.code;
+        int num = current_instruction.number;
+
+        // command router
+        if(code == 'G' && num == 1) {
+            motionPlanner.consumeInstruction(current_instruction);
+
+        } else if (code == 'M' && num == 280) {
+            if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 0) {
+                marker.consumeInstruction(current_instruction);
+                
+            } else if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 1) {
+                eraser.consumeInstruction(current_instruction);
+
+            } else {
+                printk("Unhandled servo command: %c %f\n", current_instruction.args[0].letter, (double)current_instruction.args[0].value);
+            }
+
+        } else {
+            printk("Unhandled command: %c %d\n", code, num);
         }
         
-        // Handle coordinate mode changes
-        switch(current_instruction.number) {
-            case 90: // G90 - Absolute mode
-            case 91: // G91 - Relative mode
-                // Already handled in processGCodeCommand
-                break;
-        }
-        
-        // Print navigation status periodically
-        navigation.printStatus();
     }
 
     return;

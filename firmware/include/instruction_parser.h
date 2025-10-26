@@ -12,7 +12,7 @@
 
 class InstructionParser {
 public:
-    uint8_t packet_id = 0;
+    uint8_t expected_packet_id = 0;
 
     static constexpr uint8_t MAX_ARGS = 8;
 
@@ -35,11 +35,19 @@ public:
         M280        // move servos
     };
 
-    InstructionParser() = default;
 
-    /** Parse a single G-code line (e.g. "G0 X10 Y-5 F1000") */
-    bool parseLine(const char* line, GCodeCmd& outCmd);
+    /**
+     * @brief Parse a single G-code line into a GCodeCmd structure
+     * @param line The input G-code line as a C-string
+     * @param outCmd The output GCodeCmd structure to populate
+     * @return 0 if successful parse, and -EINVAL otherwise
+     */
+    int parseLine(const char* line, GCodeCmd& outCmd);
 
-    /** Utility: check if parsed command matches a known instruction */
-    static bool isSupported(const GCodeCmd& cmd);
+    /**
+     * @brief Check if the parsed command matches a known instruction
+     * @param cmd The GCode command to check
+     * @return 0 if supported, -EINVAL otherwise
+     */
+    static int isSupported(const GCodeCmd& cmd);
 };

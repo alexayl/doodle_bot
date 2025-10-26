@@ -6,13 +6,16 @@
 #include "comms_thread.h"
 #include "navigation.h"
 #include "state_task.h"
-// #include "ui.h"
 
 /* QUEUE MANAGEMENT */
 
-#define MESSAGES_PER_QUEUE 5
+#define MESSAGES_PER_QUEUE 100
 
-K_MSGQ_DEFINE(nav_instr_queue, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
+K_MSGQ_DEFINE(gcode_cmd_msgq, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
+K_MSGQ_DEFINE(nav_cmd_msgq, sizeof(NavCommand), MESSAGES_PER_QUEUE, alignof(NavCommand));
+K_MSGQ_DEFINE(step_cmd_msgq, sizeof(StepCommand), MESSAGES_PER_QUEUE, alignof(StepCommand));
+
+
 
 /* THREAD DEFINITION AND MANAGEMENT */
 
@@ -30,23 +33,41 @@ static struct k_thread comms_thread_data;
 static struct k_thread nav_thread_data;
 static struct k_thread state_thread_data;
 
+K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
+
+    
+/* HARDWARE INITIALIZATION */
+
+static int hardware_init() {
+   
+    // TODO: init hardware peripherals as they are added
+    
+    return 0;
+}
+
+/* MAIN FUNCTION */
+
 int main(void) {
 
-    printk("Doodle Bot Firmware Starting...\n");
+    int ret = hardware_init();
+    if (ret < 0)
+    {
+        printk("ERROR: Hardware initialization failed\n");
+    }
     
-    /* Start background threads */
+    
+    /* Start threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
-                    comms_thread, &nav_instr_queue, NULL, NULL,
+                    comms_thread, &gcode_cmd_msgq, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_create(&nav_thread_data, nav_stack, STACK_SIZE,
-                    nav_thread, &nav_instr_queue, NULL, NULL,
+                    nav_thread, &gcode_cmd_msgq, &nav_cmd_msgq, &step_cmd_msgq,
                     NAV_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_create(&state_thread_data, state_stack, STACK_SIZE,
                     state_thread, NULL, NULL, NULL,
                     STATE_PRIORITY, 0, K_NO_WAIT);
-
 
     return EXIT_SUCCESS;
 }

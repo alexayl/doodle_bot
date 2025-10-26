@@ -17,15 +17,26 @@ Industry-standard for CNC machines, 3D printers, etc with well-defined and battl
 
 G-code is transmitted via BLE using the Nordic UART Service (NUS) this exposes and RX and TX characteristic allowing for packets to be send both ways. The host will send each G-code line one at a time in plain text, and the firmware will send an acknowledgement back for each successful packet.
 
+The first byte of each packet is the packet id. This value is an 8 bit integer (0-255) that increments with each packet sent.
+
 ## Example G-Code packets being sent
 
 ```
-M280 P1 S90     // set eraser up
-G91             // turn on relative positioning
-M280 P0 S0      // set the pen down
-G1 X10 Y-10     // move to the right 10 mm and down 10 mm
+<pid>M280 P1 S90    // set eraser up
+<pid>G91            // turn on relative positioning
+<pid>M280 P0 S0     // set the pen down
+<pid>G1 X10 Y-10    // move to the right 10 mm and down 10 mm
+```
+
+## Packet acknowledgement
+
+After each packet is received by the firmware, it is parsed, validated, and an ACK or NACK is sent out from the device. These are the commands sent:
+
+```
+<pid>ok             // packet successfully parsed
+<pid>fail           // packet unsuccessfully parsed     
 ```
 
 ## Protecting against corrupted packets
 
-If the G-code parser fails to parse a command, it will ask for a retry via the packet ID. This ID is the first byte of each packet and counts up from 0 to 2^8-1 with each successive packet.
+If the G-code parser fails to parse a command (it received a packet with the incorrect packet id, or the command was invalid) it will ask for a retry by sending the fail command. 
