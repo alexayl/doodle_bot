@@ -18,7 +18,7 @@ import faulthandler
 from app.cv_core import CVPipeline
 from app.control import PathRun, Waypoint
 from app.camera import ThreadedCamera, CameraConfig
-from app.path_parse import load_gcode_file, convert_pathfinding_gcode
+from app.path_parse import load_gcode_file, convert_pathfinding_gcode, scale_gcode_to_board
 from app.bt_link import BTLink
 from app.utils import encode_jpeg, Metrics
 
@@ -34,6 +34,13 @@ PATHFINDING_DIR = os.getenv(
 STREAM_JPEG_QUALITY = 75
 _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
 _MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
+
+# Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
+# This should match the canvas_size argument in _convert_image_to_gcode
+PATH_CANVAS_SIZE = (
+    float(os.getenv("PATH_CANVAS_WIDTH", "575")),
+    float(os.getenv("PATH_CANVAS_HEIGHT", "730")),
+)
 
 # If you want to completely disable legacy move streaming (dx,dy,dz) and only send G-code:
 DISABLE_MOVE_STREAMING = True
@@ -183,9 +190,6 @@ def _read_gcode_text(path_or_name: str) -> str:
 # -----------------------------------------------------------------------------#
 _cv_thread: Optional[threading.Thread] = None
 
-def _clamp(v: float, m: float) -> float:
-    return -m if v < -m else (m if v > m else v)
-
 def _process_frame_once(frame) -> tuple[bool, float]:
     t0 = time.perf_counter()
     try:
@@ -209,11 +213,7 @@ def _cv_worker():
         pass
 
     cam = get_cam()
-    batch_vertices = 12
-    idle_timeout_s = 1.0
-
-    pen_is_down = False
-    sent_initial_pen = False
+    # Legacy move streaming is removed; BLE now only receives full G-code packets.
 
     while True:
         if cam is None:
@@ -223,59 +223,11 @@ def _cv_worker():
 
         frame = cam.get_latest_good()
         if frame is None:
-            time.sleep(0.004)
+            time.sleep(0.0004)
             continue
 
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
-
-        # Legacy incremental streaming (optional). Leave enabled = False when sending raw G-code instead.
-        if RUN.active and not DISABLE_MOVE_STREAMING:
-            bt.wait_idle(idle_timeout_s)
-
-            pose = cvp.get_pose_mm()
-            verts: List[Tuple[float, float, int]] = []
-            for _ in range(batch_vertices):
-                step = RUN.follower.step(pose)  # (fwd, left) in ROBOT frame
-                if step is None:
-                    if pen_is_down:
-                        verts.append((0.0, 0.0, +1))
-                        pen_is_down = False
-                    RUN.stop()
-                    sent_initial_pen = False
-                    break
-
-                st = cvp.get_state()
-                ok_conf = (
-                    st["calibrated"]
-                    and (st["board_confidence"] is None or st["board_confidence"] >= 0.60)
-                    and st["bot_pose"] is not None
-                    and st["bot_pose"]["confidence"] >= 0.60
-                )
-                if ok_conf and pose is not None:
-                    err = RUN.follower.current_error(pose)
-                    if err is not None:
-                        ex, ey, _tgt = err
-                        cx = _clamp(_K_GAIN * ex, _MAX_CORR_MM)
-                        cy = _clamp(_K_GAIN * ey, _MAX_CORR_MM)
-                        corr = cvp.corrected_delta_for_bt((cx, cy), rotate_into_bot_frame=True)
-                        if corr is not None:
-                            step = (step[0] + float(corr[0]), step[1] + float(corr[1]))
-
-                dz = 0
-                if not sent_initial_pen:
-                    verts.append((0.0, 0.0, -1))
-                    pen_is_down = True
-                    sent_initial_pen = True
-
-                verts.append((float(step[0]), float(step[1]), dz))
-                pose = cvp.get_pose_mm()
-
-            if verts:
-                try:
-                    bt.send_moves_with_dz(verts)
-                except Exception:
-                    pass
 
         time.sleep(0.004)
 
@@ -372,8 +324,9 @@ def erase():
             else:
                 try:
                     gcode_str = _read_gcode_text("erase")
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
                     bt.send_gcode(firmware_gcode, wait_for_ack=False)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
@@ -436,8 +389,9 @@ def draw():
                 try:
                     src_for_gcode = gcode_path if gcode_path else "draw"
                     gcode_str = _read_gcode_text(src_for_gcode)
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
                     bt.send_gcode(firmware_gcode, wait_for_ack=False)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
