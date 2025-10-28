@@ -1,10 +1,9 @@
 import asyncio
 import time
-=from bleak import BleakClient, BleakScanner
-from typing import Optional, Callable, Dict, Any
+from bleak import BleakClient, BleakScanner
+from typing import Optional
 
 # NUS UUIDs
-NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_CHAR_UUID     = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write
 TX_CHAR_UUID     = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Notify
 
@@ -13,13 +12,24 @@ DEVICE_NAME = "DOO"
 all_commands = [
     b"G1 X20 Y90\n",
     b"G1 X30 Y80\n", 
-    # b"G0 X40 Y70\n",
-    # b"G0 X50 Y60\n",
-    # b"G0 X60 Y50\n",
-    # b"M280 P0 S90\n",  # Servo engage
-    # b"M280 P0 S90\n",  # Servo engage (repeat for consistency)
-    # b"M280 P0 S0\n",   # Servo disengage
-    # b"M280 P0 S0\n",   # Servo disengage (repeat for consistency)
+    b"G1 X40 Y70\n",
+    b"G1 X50 Y60\n",
+    b"G1 X20 Y90\n",
+    b"G1 X30 Y80\n", 
+    b"G1 X40 Y70\n",
+    b"G1 X50 Y60\n",
+    b"G1 X20 Y90\n",
+    b"G1 X30 Y80\n", 
+    b"G1 X40 Y70\n",
+    b"G1 X50 Y60\n",
+    b"G1 X20 Y90\n",
+    b"G1 X30 Y80\n", 
+    b"G1 X40 Y70\n",
+    b"G1 X50 Y60\n",
+    b"G1 X20 Y90\n",
+    b"G1 X30 Y80\n", 
+    b"G1 X40 Y70\n",
+    b"G1 X50 Y60\n",
 ]
 
 class BLEPacketHandler:
@@ -28,11 +38,9 @@ class BLEPacketHandler:
     def __init__(self, device_name: str = DEVICE_NAME):
         self.device_name = device_name
         self.packet_id_counter = -1  # Start at -1 so first increment gives 0
-        self.expected_response: Optional[str] = None
         self.response_received = False
         self.last_received_packet_id: Optional[int] = None
         self.last_received_message: Optional[str] = None
-        self.last_successfully_sent_packet_id: Optional[int] = None
         self.client: Optional[BleakClient] = None
         self.timeout: float = 2.0  # Default timeout for responses
         
@@ -46,13 +54,7 @@ class BLEPacketHandler:
         packet_id = self.get_next_packet_id()
         return bytes([packet_id]) + command_bytes
 
-    def rollback_packet_id(self):
-        """Rollback packet ID counter when packet fails to send"""
-        self.packet_id_counter = (self.packet_id_counter - 1) % 256
-        
-    def set_response_callback(self, callback: Callable[[int, str], None]):
-        """Set custom callback for handling responses"""
-        self.response_callback = callback
+
 
     async def connect(self) -> bool:
         """Connect to the BLE device"""
@@ -118,7 +120,6 @@ class BLEPacketHandler:
         
         # Reset response tracking
         self.response_received = False
-        self.expected_response = expected_response
         
         while True:
 
@@ -133,20 +134,17 @@ class BLEPacketHandler:
             
             # Check if we got the expected response
             if self.last_received_packet_id == packet_id and self.last_received_message[:2] == expected_response:
-                self.last_successfully_sent_packet_id = packet_id
                 print(f"RECEIVE::SUCCESS: pid: {packet_id} ack")
                 break
             else:
                 print(f"RECEIVE::FAIL: pid: {packet_id} nack {self.last_received_message}")
                 self.response_received = False
-                await asyncio.sleep(0.1)  # Brief delay before retry
         
         
 
     async def send_packets(self, all_commands):
         for command in all_commands:
             await self.send_packet(command)
-            await asyncio.sleep(0.5)
 
 
 async def main():

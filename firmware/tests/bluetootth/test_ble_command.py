@@ -52,6 +52,21 @@ async def test_1_round_trip_time(client):
         b"G0 X30 Y80\n", 
         b"G0 X40 Y70\n",
         b"G0 X50 Y60\n",
+        b"G0 X60 Y50\n",
+        b"G0 X20 Y90\n",
+        b"G0 X30 Y80\n", 
+        b"G0 X40 Y70\n",
+        b"G0 X50 Y60\n",
+        b"G0 X60 Y50\n",
+        b"G0 X20 Y90\n",
+        b"G0 X30 Y80\n", 
+        b"G0 X40 Y70\n",
+        b"G0 X50 Y60\n",
+        b"G0 X60 Y50\n",
+        b"G0 X20 Y90\n",
+        b"G0 X30 Y80\n", 
+        b"G0 X40 Y70\n",
+        b"G0 X50 Y60\n",
         b"G0 X60 Y50\n"
     ]
     
