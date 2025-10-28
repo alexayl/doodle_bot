@@ -21,6 +21,10 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     int ret = 0;
 
+    #ifdef DEBUG_BLE
+    printk("COMMS_HANDLER: Received data of length %d: %.*s\n", len, len, (const char*)data+1);
+    #endif
+
     static InstructionParser parser;
     InstructionParser::GCodeCmd cmd;
 
@@ -31,7 +35,7 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     // handle failed parse
     if (ret < 0) {
-        printk("Handler: Failed to parse G-code\n");
+        printk("COMMS_HANDLER::ERROR: failed to parse G-code\n");
 
         // Send NACK
         char nack[sizeof("afail\n")] = "afail\n";
@@ -52,9 +56,6 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
     if (g_bleService) {
         char ack[sizeof("aok\n")] = "aok\n";
         ack[0] = expected_packet_id;
-        #ifdef DEBUG_BLE
-            printk("Sending ACK: %s (id:%d)\n", ack, (uint8_t)ack[0]);
-        #endif
         g_bleService->send(ack, sizeof(ack));
     }
 

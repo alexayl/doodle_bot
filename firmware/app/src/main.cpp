@@ -33,8 +33,6 @@ static struct k_thread comms_thread_data;
 static struct k_thread nav_thread_data;
 static struct k_thread state_thread_data;
 
-K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
-
     
 /* HARDWARE INITIALIZATION */
 

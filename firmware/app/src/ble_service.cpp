@@ -53,23 +53,23 @@ void BleService::init() {
 
 	err = bt_nus_cb_register(&nus_listener, NULL);
 	if (err) {
-		printk("BLE::ERROR: Failed to register NUS callback: %d\n", err);
+		printk("BLE_INIT::ERROR: Failed to register NUS callback: %d\n", err);
 		return;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
-		printk("BLE::ERROR: Failed to enable bluetooth: %d\n", err);
+		printk("BLE_INIT::ERROR: Failed to enable bluetooth: %d\n", err);
 		return;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
-		printk("BLE::ERROR: Failed to start advertising: %d\n", err);
+		printk("BLE_INIT::ERROR: Failed to start advertising: %d\n", err);
 		return;
 	}
     #ifdef DEBUG_BLE
-	printk("BLE::SUCCESS: Initialization complete\n");
+	printk("BLE_INIT::SUCCESS: Initialization complete\n");
     #endif
 }
 
@@ -78,20 +78,26 @@ void BleService::send(const char *data, size_t len) {
     int err = bt_nus_send(NULL, data, len);
     
     if (err < 0 && (err != -EAGAIN) && (err != -ENOTCONN)) {
-        printk("BLE::ERROR: Failed to send data over BLE: %d\n", err);
+        printk("BLE_SEND::ERROR: Failed to send data over BLE: %d\n", err);
         return;
     }
     #ifdef DEBUG_BLE
-    printk("BLE::SUCCESS: Data sent successfully: %s\n", data);
+    printk("BLE_SEND::SUCCESS: pid: %hhu msg: %.*s\n", *(uint8_t*)data, len-1, (const char *)(data + 1));
     #endif
 }
 
 void BleService::receive(const void *data, uint16_t len) {
     
     if (receiveHandler) {
+        #ifdef DEBUG_BLE
+        printk("BLE_RECEIVE::SUCCESS: received pid=%hhu cmd=%.*s\n", *(uint8_t*)data, len, (const char *)data+1);
+        #endif
+
         receiveHandler(data, len, navigationQueue);
         return;
     } else {
-        printk("BLE::ERROR: No receive handler specified\n");
+        #ifdef DEBUG_BLE
+        printk("BLE_RECEIVE::ERROR: No receive handler specified\n");
+        #endif
     }
 }

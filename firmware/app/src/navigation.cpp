@@ -13,6 +13,9 @@ k_msgq* MotionPlanner::step_queue_ = nullptr;
 Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
 Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
 
+// Timer definition
+K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
+
 /* MOTION PLANNER */
 
 int MotionPlanner::interpolate() {
@@ -63,12 +66,6 @@ int MotionPlanner::discretize() {
     NavCommand nav_command;
     k_msgq_get(nav_queue_, &nav_command, K_FOREVER);
 
-    #ifdef DEBUG_NAV
-    printk("discretize: r=%.2f, theta=%.2f rad (%.1f deg)\n", 
-           (double)nav_command.r, (double)nav_command.theta, 
-           (double)(nav_command.theta * 180.0 / PI));
-    #endif
-
     // Differential drive: arc length for each wheel
     // l_dist = distance left wheel travels = R_left * theta
     // r_dist = distance right wheel travels = R_right * theta
@@ -81,17 +78,13 @@ int MotionPlanner::discretize() {
     float l_dist = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
     float r_dist = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
     
-    #ifdef DEBUG_NAV
-    printk("  l_dist=%.2f, r_dist=%.2f\n", (double)l_dist, (double)r_dist);
-    #endif
+ 
     
     // Convert to velocities
     int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
     int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
     
-    #ifdef DEBUG_NAV
-    printk("  before clamp: left_vel=%d, right_vel=%d\n", left_vel, right_vel);
-    #endif
+
     
     // Clamp to int16_t range [-32768, 32767]
     // In practice, we'll probably want a smaller range for safety
@@ -105,6 +98,10 @@ int MotionPlanner::discretize() {
 
     // push wheel velocities to step_queue_
     k_msgq_put(step_queue_, &step_command, K_FOREVER);
+
+    #ifdef DEBUG_NAV
+    printk("Step command queued: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
+    #endif
 
     return 0;
 }
@@ -128,10 +125,14 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         }
     }
 
+
     // wheel velocities are consumed by motor_control_handler()
     // start the timer that runs it if it is not currently running
     if (!k_timer_remaining_ticks(&motor_control_timer)) {
-        k_timer_start(&motor_control_timer, K_FOREVER, K_SECONDS(STEPPER_CTRL_PERIOD));
+        #ifdef DEBUG_NAV
+        printk("Starting motor control timer\n");
+        #endif
+        k_timer_start(&motor_control_timer, K_NO_WAIT, K_SECONDS(STEPPER_CTRL_PERIOD));
     }
     
     return 0;
@@ -139,6 +140,10 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
 
 
 void MotionPlanner::motor_control_handler(k_timer *timer) {
+
+    #ifdef DEBUG_NAV
+    printk("Motor control handler triggered\n");
+    #endif
 
     // get step command
     StepCommand step_command;
@@ -203,6 +208,9 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
 
         // command router
         if(code == 'G' && num == 1) {
+            #ifdef DEBUG_NAV
+            printk("Nav thread routing G1 command\n");
+            #endif
             motionPlanner.consumeInstruction(current_instruction);
 
         } else if (code == 'M' && num == 280) {

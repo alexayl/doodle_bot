@@ -7,11 +7,11 @@
         label = "SERVO_ERASER";
     };
 
-    /* Servo motor for marker control - P0.03 PWM */
+    /* Servo motor for marker control - P0.28 PWM */
     servo_marker: servo_marker {
         status = "okay";
         compatible = "doodle_servo";
-        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.03 */
+        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.28 */
         label = "SERVO_MARKER";
     };
 
@@ -26,12 +26,12 @@
         label = "LEFT_STEPPER";
     };
 
-    /* Right stepper motor via A4988 driver */
+    /* Right stepper motor via A4988 driver - DISABLED (no driver available) */
     stepper_right: stepper_right {
-        status = "okay";
+        status = "disabled";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        pwms = <&pwm0 5 20000 0>;                      /* PWM for step pulses - P0.05 */
+        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
         dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* P0.06 - Direction control */
         en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* P0.07 - Enable/disable */
         label = "RIGHT_STEPPER";
@@ -115,7 +115,7 @@
     pwm0_default: pwm0_default {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 3)>,   /* P0.03 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 28)>,  /* P0.28 - Servo Marker PWM */
                     <NRF_PSEL(PWM_OUT2, 0, 2)>,   /* P0.02 - Stepper PWM */
                     <NRF_PSEL(PWM_OUT3, 0, 15)>;  /* P0.15 - Buzzer PWM */
         };
@@ -124,7 +124,7 @@
     pwm0_sleep: pwm0_sleep {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 3)>,   /* P0.03 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 28)>,  /* P0.28 - Servo Marker PWM */
                     <NRF_PSEL(PWM_OUT2, 0, 2)>,   /* P0.02 - Stepper PWM */
                     <NRF_PSEL(PWM_OUT3, 0, 15)>;  /* P0.15 - Buzzer PWM */
             low-power-enable;

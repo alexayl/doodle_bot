@@ -2,17 +2,15 @@
 
 #include "instruction_parser.h"
 #include "peripheral_wrappers.h"
+#include <zephyr/kernel.h>
 
-#define DEBUG_NAV
+// #define DEBUG_NAV
 
 #define PI 3.14159265359
 #define WHEEL_RADIUS            (10) // radius of the wheels on each stepper motor
 #define DOODLEBOT_RADIUS        (20) // distance from center of doodlebot to wheel
-#define STEPPER_CTRL_FREQ       (20) // occurrences / SEC
+#define STEPPER_CTRL_FREQ       (2) // occurrences / SEC
 #define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ) // seconds per occurrence
-
-extern k_timer motor_control_timer;
-
 
 struct NavCommand {
     float r;          // distance to travel
@@ -61,6 +59,9 @@ private:
     int interpolate();          // G-code -> (r, theta)
     int discretize();           // (r, theta) -> (vL, vR)
 };
+
+// External timer declaration
+extern struct k_timer motor_control_timer;
 
 class ServoMover : public InstructionHandler {
 public:
