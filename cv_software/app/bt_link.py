@@ -15,12 +15,9 @@ _BT_ADDR = (os.getenv("BT_DEVICE_ADDR", "") or "").lower()
 _SCAN_SECS = float(os.getenv("BT_SCAN_SECONDS", "8"))
 
 class BTLink:
-    """Minimal BLE (Nordic UART) transport with packet-ID prefix for each line."""
+    """ BLE (Nordic UART) transport with packet-ID prefix for each line."""
 
-    HDR_MOVES  = 0xA1
     HDR_STATUS = 0x55
-    HDR_ACK    = 0xAA
-    HDR_RETRY  = 0xBB
 
     def __init__(self, port: str = "/dev/null", baud: int = 115200, read_timeout_s: float = 0.02):
         # Runtime state
@@ -58,48 +55,24 @@ class BTLink:
             self._stop_loop()
             self._connected = False
 
-    def is_idle(self) -> bool:
-        return self._idle
-
-    def wait_idle(self, timeout_s: float = 1.0) -> bool:
-        t0 = time.time()
-        while time.time() - t0 < timeout_s:
-            if self._idle:
-                return True
-            time.sleep(0.02)
-        return self._idle
 
     def stop(self) -> None:
-        """Send a simple 'pen up/stop' move using the binary header format."""
+        """Send a stop command (kept for compatibility but not used with G-code flow)."""
         if not self._connected:
             return
-        payload = struct.pack("<ffb", 0.0, 0.0, +1)  # dz = +1 => pen up/stop
-        pkt = bytes([self.HDR_MOVES, 1]) + payload + bytes([self._checksum(payload)])
-        self._run(self._async_write(pkt, response=False))
-
-    def send_moves_with_dz(self, moves: List[Tuple[float, float, int]]) -> None:
-        """Binary move packets (not used when you send raw G-code — kept for compatibility)."""
-        if not self._connected or not moves:
-            return
-        for dx, dy, dz in moves:
-            dzc = 1 if int(dz) > 0 else (-1 if int(dz) < 0 else 0)
-            payload = struct.pack("<ffb", float(dx), float(dy), dzc)
-            pkt = bytes([self.HDR_MOVES, 1]) + payload + bytes([self._checksum(payload)])
-            self._run(self._async_write(pkt, response=False))
-            time.sleep(0.005)
+        pass
 
     def send_gcode(
         self,
         gcode_str: str,
         *,
-        chunk_bytes: int = 120,
-        inter_chunk_s: float = 0.015,   # small pacing
-        eol: str = "\n",
+        inter_line_s: float = 0.02,
         write_with_response: bool = False,
-        wait_for_ack: bool = False,
-        max_retries: int = 3,
+        wait_for_ack: bool = True,
+        max_retries: int = 5,
+        ack_timeout_s: float = 2.0,
     ) -> None:
-        """Line-oriented G-code with packet-id as the first byte, like your test script."""
+
         if not gcode_str or not self._connected:
             return
 
@@ -112,50 +85,54 @@ class BTLink:
             return
 
         for line in lines:
-            # Build packet: <pid><utf8_line + eol>
             pid = self._next_pid()
-            packet = bytes([pid]) + (line + eol).encode("utf-8")
+            
+            packet = bytes([pid]) + (line + "\n").encode("utf-8")
 
-            # Reset notify tracking
             self._rx_flag = False
             self._rx_pid = None
             self._rx_msg = ""
-            t0 = time.time()
 
-            # Try send (optionally flip response flag if peer rejects)
+            print(f"Sending packet {pid}: {line}")
             self._run(self._async_write(packet, response=write_with_response))
 
             if not wait_for_ack:
-                time.sleep(inter_chunk_s)
+                time.sleep(inter_line_s)
                 continue
 
-            # Minimal ACK wait loop (expects the peer to echo 'ok' with same pid)
             ok = False
-            timeout = 2.0
-            end = t0 + timeout
-            while time.time() < end:
-                if self._rx_flag and self._rx_pid == pid and "ok" in self._rx_msg:
-                    ok = True
-                    break
-                time.sleep(0.01)
-
-            if not ok:
-                # simple bounded retry
-                retries = 0
-                while retries < max_retries and not ok:
-                    retries += 1
+            retries = 0
+            
+            while retries <= max_retries and not ok:
+                if retries > 0:
+                    # Retry: resend the same packet
                     self._rx_flag = False
+                    self._rx_pid = None
+                    self._rx_msg = ""
                     self._run(self._async_write(packet, response=write_with_response))
-                    t0 = time.time()
-                    end = t0 + timeout
-                    while time.time() < end:
-                        if self._rx_flag and self._rx_pid == pid and "ok" in self._rx_msg:
+                    time.sleep(0.05)  # Brief delay after retry
+                
+                t0 = time.time()
+                end = t0 + ack_timeout_s
+                while time.time() < end:
+                    if self._rx_flag and self._rx_pid == pid:
+                        if "ok" in self._rx_msg.lower():
                             ok = True
                             break
-                        time.sleep(0.01)
+                        elif "fail" in self._rx_msg.lower():
+                            break
+                    time.sleep(0.01)
+                
+                if ok:
+                    break
+                    
+                retries += 1
+            
+            if not ok:
+                print(f"Warning: Failed to get ACK for packet {pid} after {max_retries} retries: {line}")
 
-            # small pacing either way
-            time.sleep(inter_chunk_s)
+            # Pacing between lines
+            time.sleep(inter_line_s)
 
     # ---------------- Internals ----------------
 
@@ -199,7 +176,6 @@ class BTLink:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
     async def _async_connect(self):
-        # Choose target by exact addr, else by name substring, else any NUS advertiser
         devices = await BleakScanner.discover(timeout=_SCAN_SECS)
         print("Discovered BLE devices:")
         target = None
@@ -209,7 +185,6 @@ class BTLink:
             target = next((d for d in devices if d.name and _BT_NAME.lower() in d.name.lower()), None)
         print(target)
         if not target:
-            # fallback: any device advertising NUS service UUID
             for d in devices:
                 meta = getattr(d, "metadata", {}) or {}
                 uuids = [u.lower() for u in meta.get("uuids", []) if isinstance(u, str)]
@@ -256,6 +231,11 @@ class BTLink:
                 raise
 
     def _on_notify(self, _uuid: str, data: bytearray):
+        """
+        Parse firmware responses per spec:
+        - <pid_byte><text>: where first byte is numeric pid, remainder is "ok" or "fail"
+        - HDR_STATUS: device status (idle/busy)
+        """
         self._rx_time = time.time()
         self._rx_flag = True
         if not data:
@@ -263,9 +243,10 @@ class BTLink:
             return
 
         b0 = data[0]
+        
         if b0 == self.HDR_STATUS and len(data) >= 2:
             self._idle = bool(data[1] & 0x01)
             return
 
         self._rx_pid = b0
-        self._rx_msg = data[1:].decode(errors="ignore").strip()
+        self._rx_msg = data[1:].decode("utf-8", errors="ignore").strip()

@@ -14,9 +14,8 @@ class FollowerParams:
     pos_eps_mm: float = 2.0
     # legacy magnitude clamp
     max_step_mm: float = 25.0
-    # NEW: anisotropic caps in ROBOT frame (forward/left)
     max_step_forward_mm: float = 25.0
-    max_step_left_mm: float = 12.0   # give Y/left less if you want tighter control
+    max_step_left_mm: float = 12.0
 
 class PathFollower:
     """

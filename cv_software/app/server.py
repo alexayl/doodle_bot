@@ -36,14 +36,10 @@ _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
 _MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
 
 # Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
-# This should match the canvas_size argument in _convert_image_to_gcode
 PATH_CANVAS_SIZE = (
     float(os.getenv("PATH_CANVAS_WIDTH", "575")),
     float(os.getenv("PATH_CANVAS_HEIGHT", "730")),
 )
-
-# If you want to completely disable legacy move streaming (dx,dy,dz) and only send G-code:
-DISABLE_MOVE_STREAMING = True
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
@@ -96,7 +92,7 @@ def _as_waypoints(seq) -> List[Waypoint]:
 # -----------------------------------------------------------------------------#
 def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
     """
-    Convert ("move", dx,dy, dz) incremental ops to [0..1] normalized waypoints.
+    Convert ("move", dx, dy) incremental ops to [0..1] normalized waypoints.
     """
     x = y = 0.0
     pts: List[tuple[float, float]] = []
@@ -216,6 +212,12 @@ def _cv_worker():
     # Legacy move streaming is removed; BLE now only receives full G-code packets.
 
     while True:
+        if bt._connected is False:
+            try:
+                bt.connect()
+            except Exception:
+                time.sleep(1.0)
+                continue
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
@@ -327,7 +329,7 @@ def erase():
                     
                     # Normalize and scale to firmware G-code using current calibration
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    bt.send_gcode(firmware_gcode, wait_for_ack=True)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -392,7 +394,7 @@ def draw():
                     
                     # Normalize and scale to firmware G-code using current calibration
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    bt.send_gcode(firmware_gcode, wait_for_ack=True)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 

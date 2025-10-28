@@ -13,8 +13,7 @@ _NUM_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 def load_gcode_file(path: str) -> List[Tuple]:
     """
     Returns ops as:
-      - ("move", dx, dy, dz)   # incremental (G91) move in mm; dz ∈ {-1,0,1} meaning:
-                               #   +1 pen UP after move, 0 no change, -1 pen DOWN after move
+      - ("move", dx, dy)       # incremental (G91) move in mm
       - ("pen", True|False)    # True = down (M3), False = up (M5)
     """
     text = _read_text(path)
@@ -47,28 +46,19 @@ def load_gcode_file(path: str) -> List[Tuple]:
 
         dx = _match_float(r"\bX(" + _NUM_RE + r")\b", u)
         dy = _match_float(r"\bY(" + _NUM_RE + r")\b", u)
-        dz = _match_float(r"\bZ(" + _NUM_RE + r")\b", u)
 
-        if dx is None or dy is None or dz is None:
+        if dx is None or dy is None:
             tail = re.sub(r"^\s*G[01]\s*", "", line, flags=re.I)
             nums = re.findall(_NUM_RE, tail)
             if dx is None and len(nums) >= 1: dx = float(nums[0])
             if dy is None and len(nums) >= 2: dy = float(nums[1])
-            if dz is None and len(nums) >= 3: dz = float(nums[2])
 
         dx = float(dx) if dx is not None else 0.0
         dy = float(dy) if dy is not None else 0.0
-        dz_i = 0
-        if dz is not None:
-            zf = float(dz)
-            dz_i = 1 if zf > 0 else (-1 if zf < 0 else 0)
 
         if inc_mode:
-            if dx != 0.0 or dy != 0.0 or dz_i != 0:
-                ops.append(("move", dx, dy, dz_i))
-        else:
-            if dz_i != 0:
-                ops.append(("pen", False if dz_i > 0 else True))
+            if dx != 0.0 or dy != 0.0:
+                ops.append(("move", dx, dy))
 
     return ops
 
@@ -98,21 +88,22 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
 
     Accepted inputs (from path2gcode.py or legacy files):
     - path2gcode.py format:
-        G90            ; absolute preamble (ignored/removed)
-        M280 P0 S90    ; pen up
-        G1 X.. Y..     ; absolute move to start (ignored/removed)
-        G91            ; switch to relative
-        G1 X.. Y..     ; relative stroke segments (kept)
-        M280 P0 S0/90  ; pen down/up (kept)
-    - Legacy format with M3/M5 or Z encodings will be converted to M280 and relative G1.
+        G90            ; absolute preamble (KEPT for initialization)
+        M280 P0 S90    ; pen up (KEPT)
+        G1 X.. Y..     ; absolute move to start (KEPT)
+        G91            ; switch to relative (KEPT)
+        G1 X.. Y..     ; relative stroke segments (KEPT)
+        M280 P0 S0/90  ; pen down/up (KEPT)
+    - Legacy format with M3/M5 will be converted to M280.
     
     Rules:
-    - Enforce relative mode (G91) in the output header and drop any absolute G1 moves.
-    - Convert M3/M5 to M280 P0 S0/S90 and keep existing M280 lines.
-    - Convert G1 X Y Z (Z∈{-1,0,1}) to M280 + G1 without Z.
-    - Remove G90 and comments.
+    - Keep G90, initial M280, and absolute positioning move to start.
+    - Keep G91 and all subsequent relative moves.
+    - Convert M3/M5 to M280 P0 S0/S90.
+    - Remove comments.
     
     The firmware supports:
+    - G90: Absolute positioning
     - G91: Relative positioning
     - G1 X<mm> Y<mm>: Linear movement
     - M280 P<servo> S<position>: Servo control
@@ -127,11 +118,10 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
         with open("pathfinding/draw.gcode") as f:
             original = f.read()
         compatible = convert_pathfinding_gcode(original)
-        bt.send_gcode(compatible, wait_for_ack=False)
+        bt.send_gcode(compatible, wait_for_ack=True)
     """
     out_lines: List[str] = []
-    inc_mode = False  # only pass G1/G0 after we see G91
-    emitted_g91 = False
+    inc_mode = False  # Track if we're in relative mode (G91)
     
     for raw_line in gcode_text.splitlines():
         # Remove comments
@@ -151,16 +141,16 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             out_lines.append("M280 P0 S90")
             continue
 
-        # Drop absolute mode preamble
+        # Keep G90 (absolute positioning for initialization)
         if line_upper.startswith("G90"):
+            out_lines.append("G90")
+            inc_mode = False
             continue
 
-        # Detect and normalize G91
+        # Keep G91 (relative positioning)
         if line_upper.startswith("G91"):
+            out_lines.append("G91")
             inc_mode = True
-            if not emitted_g91:
-                out_lines.append("G91")
-                emitted_g91 = True
             continue
 
         # Pass M280 through unchanged
@@ -168,39 +158,13 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             out_lines.append(line)
             continue
 
-        # Handle moves: only after we are in relative mode (ignore absolute moves)
+        # Handle all G0/G1 moves (both absolute and relative)
         if line_upper.startswith(("G0 ", "G1 ", "G0\t", "G1\t", "G0", "G1")):
-            if not inc_mode:
-                # Skip any absolute move to start position
-                continue
-
-            # Parse optional X Y Z in "G1 X Y Z" shorthand
-            parts = line.split()
-            if len(parts) >= 4:
-                try:
-                    x = float(parts[1])
-                    y = float(parts[2])
-                    z = int(float(parts[3]))
-                    if z == -1:
-                        out_lines.append("M280 P0 S0")
-                    # Append move without Z
-                    out_lines.append(f"G1 X{x} Y{y}")
-                    if z == 1:
-                        out_lines.append("M280 P0 S90")
-                    continue
-                except (ValueError, IndexError):
-                    pass
-
-            # Regular G0/G1 without Z; keep as-is
             out_lines.append(line)
             continue
 
         # Ignore everything else
         continue
-
-    # Ensure we always emit G91 header even if source lacked it
-    if not emitted_g91:
-        out_lines.insert(0, "G91")
 
     return "\n".join(out_lines) + "\n" if out_lines else ""
 
