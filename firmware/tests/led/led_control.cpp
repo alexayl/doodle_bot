@@ -14,12 +14,6 @@
 /* LED device and configuration */
 /* Using simple LED driver instead of Zephyr LED subsystem */
 
-/**
- * LED Driver Abstraction Layer
- * Core firmware tells driver "ON" or "OFF"
- * The led_command_t enum and led_driver_set function 
- * are provided by simple_led.h
- */
 
 int main(void)
 {

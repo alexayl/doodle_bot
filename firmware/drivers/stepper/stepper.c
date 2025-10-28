@@ -14,6 +14,9 @@
 
 LOG_MODULE_REGISTER(stepper, CONFIG_LOG_DEFAULT_LEVEL);
 
+/* Direction inversion - set to true to invert direction logic */
+#define INVERT_DIRECTION false
+
 /* Stepper motor devicetree nodes */
 #define STEPPER_LEFT_NODE  DT_NODELABEL(stepper_left)
 #define STEPPER_RIGHT_NODE DT_NODELABEL(stepper_right)
@@ -99,15 +102,30 @@ int stepper_init(void)
         return -ENODEV;
     }
 
-    /* Check GPIO ready */
+    /* Check GPIO ready for both steppers */
     if (!device_is_ready(dir_pin.port) || !device_is_ready(en_pin.port)) {
-        LOG_ERR("GPIO devices not ready");
+        LOG_ERR("Left stepper GPIO devices not ready");
         return -ENODEV;
     }
 
-    /* Configure GPIO pins */
+    /* Configure LEFT stepper GPIO pins */
     gpio_pin_configure_dt(&dir_pin, GPIO_OUTPUT_INACTIVE);
-    gpio_pin_configure_dt(&en_pin, GPIO_OUTPUT_INACTIVE);  // Start disabled (LOW = disabled)
+    gpio_pin_configure_dt(&en_pin, GPIO_OUTPUT_INACTIVE);
+
+#if DT_NODE_EXISTS(STEPPER_RIGHT_NODE) && DT_NODE_HAS_STATUS(STEPPER_RIGHT_NODE, okay)
+    /* Configure RIGHT stepper GPIO pins */
+    static const struct gpio_dt_spec right_dir_pin = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, dir_gpios);
+    static const struct gpio_dt_spec right_en_pin = GPIO_DT_SPEC_GET(STEPPER_RIGHT_NODE, en_gpios);
+    
+    if (!device_is_ready(right_dir_pin.port) || !device_is_ready(right_en_pin.port)) {
+        LOG_ERR("Right stepper GPIO devices not ready");
+        return -ENODEV;
+    }
+    
+    gpio_pin_configure_dt(&right_dir_pin, GPIO_OUTPUT_INACTIVE);
+    gpio_pin_configure_dt(&right_en_pin, GPIO_OUTPUT_INACTIVE);
+    LOG_INF("Right stepper GPIO pins configured");
+#endif  
 
     initialized = true;
     LOG_INF("Stepper initialized: 1.8° motor, 16x microstepping, PWM-based");
@@ -211,10 +229,19 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
     uint32_t step_freq_hz = (uint32_t)(fabsf(velocity_deg_s) * DEG_TO_STEPS);
     bool clockwise = (velocity_deg_s >= 0);
 
-    /* Set direction */
-    gpio_pin_set_dt(dir, clockwise ? 1 : 0);
-    LOG_INF("Motor %d Direction set: %s (pin=%d)", motor, 
-            clockwise ? "CLOCKWISE" : "COUNTERCLOCKWISE", clockwise ? 1 : 0);
+    LOG_INF("Motor %d: velocity=%.1f°/s, step_freq=%u Hz, clockwise=%s", 
+            motor, (double)velocity_deg_s, step_freq_hz, clockwise ? "yes" : "no");
+
+    /* Only set direction when actually moving (not when stopping) */
+    if (step_freq_hz > 0) {
+        /* Set direction with optional inversion */
+        bool dir_pin_value = INVERT_DIRECTION ? !clockwise : clockwise;
+        gpio_pin_set_dt(dir, dir_pin_value ? 1 : 0);
+        
+        LOG_INF("Motor %d Direction set: %s (pin=%d, inverted=%s)", motor, 
+                clockwise ? "CLOCKWISE" : "COUNTERCLOCKWISE", dir_pin_value ? 1 : 0,
+                INVERT_DIRECTION ? "yes" : "no");
+    }
     
     /* Small delay to ensure direction is set before stepping starts */
     k_usleep(10);  /* 10 microseconds delay */
