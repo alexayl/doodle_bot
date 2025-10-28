@@ -167,55 +167,21 @@ class BLEPacketHandler:
         await self.client.write_gatt_char(RX_CHAR_UUID, packet_with_id)
         return packet_id
 
-    async def send_packets(self, all_commands):
-        
-
-
-        # Separate measurement collections
-        movement_rtt_measurements = []
-        servo_engage_rtt_measurements = []
-        servo_disengage_rtt_measurements = []
-        all_rtt_measurements = []
-        
-        for i, command in enumerate(all_commands):
-            # Determine command type for categorization
-            command_str = command.decode().strip()
-            if "M280 P0 S90" in command_str:
-                command_type = "servo_engage"
-                print(f"\n🔧 Servo Engage {i+1}: {command_str}")
-            elif "M280 P0 S0" in command_str:
-                command_type = "servo_disengage"
-                print(f"\n🔧 Servo Disengage {i+1}: {command_str}")
-            else:
-                command_type = "movement"
-                print(f"\n📐 Movement {i+1}: {command_str}")
-            
+    async def send_packet(self, command):
             # Send command with packet ID and measure response time
             result = await self.send_packet_with_response(command, "ok", 2.0)
             
             if result["success"]:
-                rtt = result["round_trip_time_ms"]
-                one_way_estimate = result["estimated_one_way_ms"]
-                
-                # Add to appropriate measurement collection
-                all_rtt_measurements.append(rtt)
-                if command_type == "movement":
-                    movement_rtt_measurements.append(rtt)
-                elif command_type == "servo_engage":
-                    servo_engage_rtt_measurements.append(rtt)
-                elif command_type == "servo_disengage":
-                    servo_disengage_rtt_measurements.append(rtt)
-                
-                print(f"  Packet ID: {result['packet_id']}")
-                print(f"  Send time: {result['send_time']:.6f}s")
-                print(f"  Response time: {result['response_time']:.6f}s")
-                print(f"  Round-trip time: {rtt:.2f}ms")
-                print(f"  Estimated one-way time: {one_way_estimate:.2f}ms")
+                print("Successful packet transmission.")
             else:
                 print(f"  ❌ {result.get('error', 'Unknown error')}")
-            
-            # Small delay between commands
+
+
+    async def send_packets(self, all_commands):
+        for command in all_commands:
+            self.send_packet(command)
             await asyncio.sleep(0.5)
+
 
 async def main():
     # Create BLE packet handler
