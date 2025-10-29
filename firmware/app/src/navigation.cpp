@@ -78,30 +78,37 @@ int MotionPlanner::discretize() {
     float l_dist = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
     float r_dist = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
     
- 
-    
     // Convert to velocities
     int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
     int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
     
 
+    StepCommand step_command;
     
-    // Clamp to int16_t range [-32768, 32767]
-    // In practice, we'll probably want a smaller range for safety
-    left_vel = (left_vel < -32768) ? -32768 : ((left_vel > 32767) ? 32767 : left_vel);
-    right_vel = (right_vel < -32768) ? -32768 : ((right_vel > 32767) ? 32767 : right_vel);
-    
-    StepCommand step_command = {
-        (int16_t)left_vel,
-        (int16_t)right_vel
-    };
+    // If velocity larger than max velocity, split into multiple commands
+    do {
+        if (fabs(left_vel) > STEPPER_MAX_VELOCITY) {
+            left_vel -= STEPPER_MAX_VELOCITY;
+            step_command.left_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+        } else {
+            step_command.left_velocity = (int16_t)left_vel;
+            left_vel = 0;
+        }
+        if (fabs(right_vel) > STEPPER_MAX_VELOCITY) {
+            right_vel -= STEPPER_MAX_VELOCITY;
+            step_command.right_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+        } else {
+            step_command.right_velocity = (int16_t)right_vel;
+            right_vel = 0;
+        }
 
-    // push wheel velocities to step_queue_
-    k_msgq_put(step_queue_, &step_command, K_FOREVER);
-
-    #ifdef DEBUG_NAV
-    printk("Step command queued: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
-    #endif
+        // push wheel velocities to step_queue_
+        k_msgq_put(step_queue_, &step_command, K_FOREVER);
+        
+        #ifdef DEBUG_NAV
+        // printk("Step command queued (split): left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
+        #endif
+    } while (fabs(left_vel) > STEPPER_MAX_VELOCITY || fabs(right_vel) > STEPPER_MAX_VELOCITY);
 
     return 0;
 }
@@ -147,7 +154,10 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
 
     // get step command
     StepCommand step_command;
-    if (!k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+    if (k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+        #ifdef DEBUG_NAV
+        printk("No more step commands, stopping steppers\n");
+        #endif
         stepper_left_.stop();
         stepper_right_.stop();
         k_timer_stop(&motor_control_timer);
@@ -156,7 +166,8 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
 
     // call stepper driver at specified velocity
     #ifdef DEBUG_NAV
-    printk("Stepper command: left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
+    printk("Setting velocity\n");
+    step_command.print();
     #endif
 
     stepper_left_.setVelocity(step_command.left_velocity);
@@ -194,6 +205,7 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
     MotionPlanner motionPlanner(nav_cmd_msgq, step_cmd_msgq);
     ServoMover marker("servom");  // servo marker
     ServoMover eraser("servoe");  // servo eraser
+
 
     while(1) {
         // Block until message arrives

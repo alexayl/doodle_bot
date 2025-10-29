@@ -4,13 +4,15 @@
 #include "peripheral_wrappers.h"
 #include <zephyr/kernel.h>
 
-// #define DEBUG_NAV
+#define DEBUG_NAV
 
-#define PI 3.14159265359
+#define PI                      (3.14159265359)
 #define WHEEL_RADIUS            (10) // radius of the wheels on each stepper motor
-#define DOODLEBOT_RADIUS        (20) // distance from center of doodlebot to wheel
-#define STEPPER_CTRL_FREQ       (2) // occurrences / SEC
+#define DOODLEBOT_RADIUS        (10) // distance from center of doodlebot to wheel
+#define STEPPER_CTRL_FREQ       (5) // occurrences / SEC
 #define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ) // seconds per occurrence
+
+#define STEPPER_MAX_VELOCITY   (150.0f) // degrees per second
 
 struct NavCommand {
     float r;          // distance to travel
@@ -20,6 +22,10 @@ struct NavCommand {
 struct StepCommand {
     int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
     int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
+
+    void print() const {
+        printk("StepCommand: left_velocity=%d, right_velocity=%d\n", left_velocity, right_velocity);
+    }
 };
 
 /* Functions */
@@ -40,6 +46,8 @@ public:
     MotionPlanner(k_msgq *nav_queue, k_msgq *step_queue) {
         nav_queue_ = nav_queue;
         step_queue_ = step_queue;
+        stepper_left_.initialize();
+        stepper_right_.initialize();
     };
     int consumeInstruction(const InstructionParser::GCodeCmd &) override;
 

@@ -22,7 +22,12 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
     int ret = 0;
 
     #ifdef DEBUG_BLE
-    printk("COMMS_HANDLER: Received data of length %d: %.*s\n", len, len, (const char*)data+1);
+    printk("COMMS_HANDLER: Received data of length %d: ", len);
+    for (int i = 0; i < len; i++) {
+        printk("%02X ", ((uint8_t*)data)[i]);
+    }
+    printk("\n");
+    printk("COMMS_HANDLER: As string: %.*s\n", len, (const char*)data);
     #endif
 
     static InstructionParser parser;
@@ -30,7 +35,7 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     uint8_t expected_packet_id = parser.expected_packet_id;
 
-    // parse the incoming G-code string into the GCodeCmd structure
+    // Let the parser handle packet ID validation as it was designed
     ret = parser.parseLine((const char*)data, cmd);
 
     // handle failed parse
