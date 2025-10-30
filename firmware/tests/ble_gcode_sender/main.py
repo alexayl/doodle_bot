@@ -11,13 +11,13 @@ import argparse
 from typing import List
 from packetlib import BLEPacketHandler
 
-DEVICE_NAME = "DOO"
+DEVICE_NAME = "Zephyr"
 
 default_commands = [
     b"G1 X20 Y90\n",
     b"G1 X30 Y80\n", 
-    b"G1 X40 Y70\n",
-    b"G1 X50 Y60\n",
+    # b"G1 X40 Y70\n",
+    # b"G1 X50 Y60\n",
 ]
 
 def load_gcode_file(filename: str) -> List[bytes]:

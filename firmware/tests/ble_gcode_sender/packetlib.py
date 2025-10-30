@@ -11,14 +11,12 @@ from typing import Optional
 RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-DEVICE_NAME = "DOO"
-
 class BLEPacketHandler:
     """
     Handles reliable packet transmission.
     """
     
-    def __init__(self, device_name: str = DEVICE_NAME):
+    def __init__(self, device_name: str):
         self.device_name = device_name
         self.packet_id_counter = -1
         self.response_received = False
@@ -45,14 +43,38 @@ class BLEPacketHandler:
         """
         print("Scanning for BLE devices...")
         devices = await BleakScanner.discover()
-        target = None
+        
+        # Debug: Show all discovered devices
+        print("Discovered devices:")
         for d in devices:
-            if d.name and self.device_name in d.name:
-                target = d
-                break
+            print(f"  - Name: '{d.name}' | Address: {d.address}")
+        
+        target = None
+        # Try multiple matching strategies
+        for d in devices:
+            if d.name:
+                # Exact match
+                if d.name == self.device_name:
+                    target = d
+                    print(f"Found exact match: {d.name}")
+                    break
+                # Contains match
+                elif self.device_name in d.name:
+                    target = d
+                    print(f"Found partial match: {d.name} contains {self.device_name}")
+                    break
+                # Reverse contains (device name contains our search)
+                elif d.name in self.device_name:
+                    target = d
+                    print(f"Found reverse match: {self.device_name} contains {d.name}")
+                    break
 
         if not target:
-            print(f"Device '{self.device_name}' not found.")
+            print(f"Device matching '{self.device_name}' not found.")
+            print("Available devices with names:")
+            for d in devices:
+                if d.name:
+                    print(f"  - {d.name}")
             return False
 
         print(f"Connecting to {target.name} ({target.address})...")
