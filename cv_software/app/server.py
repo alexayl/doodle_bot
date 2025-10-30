@@ -62,7 +62,7 @@ def get_cam() -> Optional[ThreadedCamera]:
 # -----------------------------------------------------------------------------#
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
-bt = BTLink(port=os.getenv("BT_PORT", "/dev/ttyUSB0"), baud=int(os.getenv("BT_BAUD", "115200")))
+bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
 @contextmanager
 def _in_dir(path: str):
     old = os.getcwd()
@@ -216,6 +216,12 @@ def _cv_worker():
     sent_initial_pen = False
 
     while True:
+        if not bt.client or not bt.client.is_connected:
+            try:
+                bt.connect()
+            except Exception:
+                time.sleep(1.0)
+                continue
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
@@ -357,8 +363,6 @@ def erase():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("erase"))
 
         # 1) Build normalized path for local preview/control (unchanged)
@@ -372,9 +376,10 @@ def erase():
             else:
                 try:
                     gcode_str = _read_gcode_text("erase")
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -396,8 +401,6 @@ def draw():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("draw"))
 
         uploaded_file = request.files.get("file")
@@ -436,9 +439,10 @@ def draw():
                 try:
                     src_for_gcode = gcode_path if gcode_path else "draw"
                     gcode_str = _read_gcode_text(src_for_gcode)
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -466,7 +470,7 @@ def stream():
 def _shutdown():
     try:
         RUN.stop()
-        bt.stop()
+        bt.close()  # Use close() instead of stop()
     except Exception:
         pass
     cam = get_cam()
