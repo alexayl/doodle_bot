@@ -6,10 +6,12 @@
 #include "comms_thread.h"
 #include "navigation.h"
 #include "state_task.h"
+#include "stepper.h"
+
 
 /* QUEUE MANAGEMENT */
 
-#define MESSAGES_PER_QUEUE 100
+#define MESSAGES_PER_QUEUE 200
 
 K_MSGQ_DEFINE(gcode_cmd_msgq, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
 K_MSGQ_DEFINE(nav_cmd_msgq, sizeof(NavCommand), MESSAGES_PER_QUEUE, alignof(NavCommand));
@@ -19,11 +21,11 @@ K_MSGQ_DEFINE(step_cmd_msgq, sizeof(StepCommand), MESSAGES_PER_QUEUE, alignof(St
 
 /* THREAD DEFINITION AND MANAGEMENT */
 
-#define STACK_SIZE      2048
+#define STACK_SIZE      1024*8
 
-#define COMMS_PRIORITY  1
-#define NAV_PRIORITY    3
-#define STATE_PRIORITY  1
+#define COMMS_PRIORITY  2
+#define NAV_PRIORITY    1
+#define STATE_PRIORITY  0
 
 K_THREAD_STACK_DEFINE(comms_stack, STACK_SIZE);
 K_THREAD_STACK_DEFINE(nav_stack, STACK_SIZE);
@@ -33,14 +35,17 @@ static struct k_thread comms_thread_data;
 static struct k_thread nav_thread_data;
 static struct k_thread state_thread_data;
 
-K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
-
     
 /* HARDWARE INITIALIZATION */
 
 static int hardware_init() {
    
     // TODO: init hardware peripherals as they are added
+        int ret = stepper_init();
+    if (ret < 0) {
+        printk("ERROR: Stepper initialization failed: %d\n", ret);
+        return ret;
+    }
     
     return 0;
 }

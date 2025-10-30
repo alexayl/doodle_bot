@@ -13,7 +13,7 @@ public:
 class Stepper: public Peripheral {
 public:
     Stepper(stepper_motor motor) : motor_(motor) {}
-    void initialize() override { stepper_init(); }
+    void initialize() override { stepper_init(); stepper_enable(motor_); }
     void stop() { stepper_stop(motor_); }
     void setVelocity(float velocity) { stepper_set_velocity(motor_, velocity); }
 

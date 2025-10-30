@@ -8,10 +8,20 @@
 #include <zephyr/devicetree.h>
 #include "pwm_buzzer.h"
 
-// Hardware setup
-#define PWM_DEV_NODE DT_NODELABEL(ledc0)
+// Hardware setup - platform specific
+#if DT_NODE_EXISTS(DT_NODELABEL(ledc0))
+    // ESP32 platform
+    #define PWM_DEV_NODE DT_NODELABEL(ledc0)
+    #define PWM_CHANNEL 2  // GPIO12
+#elif DT_NODE_EXISTS(DT_NODELABEL(pwm0))
+    // nRF platform
+    #define PWM_DEV_NODE DT_NODELABEL(pwm0)
+    #define PWM_CHANNEL 3  // Channel 3 for buzzer on nRF
+#else
+    #error "No compatible PWM controller found"
+#endif
+
 #define PWM_DEV DEVICE_DT_GET(PWM_DEV_NODE)
-#define PWM_CHANNEL 2  // GPIO12
 
 // Fixed buzzer settings - percentage based volume
 #define BUZZER_FREQUENCY_HZ 400

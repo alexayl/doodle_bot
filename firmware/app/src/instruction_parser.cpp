@@ -12,9 +12,6 @@ int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     outCmd = {}; // reset
     const char* ptr = line;
 
-    // skip whitespace
-    while (isspace(*ptr)) ptr++;
-
     // find and validate packet id
     uint8_t packet_id = (uint8_t)*ptr;
     if (packet_id == expected_packet_id) {
@@ -25,9 +22,6 @@ int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     }
 
     ptr++;
-
-    // skip whitespace after packet id
-    while (isspace(*ptr)) ptr++;
 
     // validate command code
     outCmd.code = toupper(*ptr++);
@@ -54,13 +48,18 @@ int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
         if (*ptr == '-' || *ptr == '+') ptr++;
         while (isdigit(*ptr) || *ptr == '.') ptr++;
     }
+
+    #ifdef DEBUG_INSTRUCTION_PARSER
+        // TODO: Debug print the parsed command
+
+    #endif
     
     // validate that the command is supported
     return isSupported(outCmd);
 }
 
 int InstructionParser::isSupported(const GCodeCmd& cmd) {
-    if (cmd.code == 'G' && (cmd.number == 91 || cmd.number == 0))
+    if (cmd.code == 'G' && (cmd.number == 91 || cmd.number == 1))
         return 0;
     if (cmd.code == 'M' && cmd.number == 280)
         return 0;
