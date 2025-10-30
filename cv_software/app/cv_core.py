@@ -455,151 +455,18 @@ class CVPipeline:
         px = st["bot_pose"]["center_board_px"]
         mpp = float(st["mm_per_px"])
         return (px[0] * mpp, px[1] * mpp), float(st["bot_pose"]["heading_rad"]), float(st["bot_pose"]["confidence"])
-    def build_firmware_gcode(self, gcode_text: str, canvas_size: Tuple[float, float], margin_frac: float = 0.10) -> str:
+    def build_firmware_gcode(self, gcode_text: str, canvas_size: Tuple[float, float] = (575.0, 730.0)) -> str:
         """
-        Remap canvas-space G-code (e.g., 575x730 units) into board millimeters using
-        the current calibration and an optional uniform margin.
+        Convert pathfinding G-code (canvas units) into firmware-ready, relative G-code
+        using the current calibration.
 
-        - Requires a valid calibration with mm_per_px set (self.board_size_mm() must be not None).
-        - Rewrites only G0/G1 X/Y coordinates; passes through other commands unchanged.
-        - Keeps feedrates (F), Z moves, spindle/pen commands, comments, etc.
-        - Applies a uniform scale and centers the drawing inside the board with margin_frac.
+        - Scales G0/G1 X/Y from canvas units to detected board mm.
+        - Normalizes to firmware subset: enforce G91 and map any legacy M3/M5 to M280.
 
-        Args:
-            gcode_text: Original G-code as text from your path pipeline.
-            canvas_size: (W_canvas, H_canvas) in the same units used by the path generator.
-            margin_frac: Fractional margin on each side of the board area (0.10 = 10% all around).
-
-        Returns:
-            Firmware-ready G-code string in millimeters.
+        Returns the G-code string ready to transmit. Requires a valid board size.
         """
-        import re
-
-        board_mm = self.board_size_mm()
-        if not board_mm:
-            raise RuntimeError("Board is not calibrated or missing mm_per_px scale.")
-
-        Wc, Hc = float(canvas_size[0]), float(canvas_size[1])
-        Wm, Hm = float(board_mm[0]), float(board_mm[1])
-
-        # Apply uniform inset margin on all sides
-        inset_x = margin_frac * Wm
-        inset_y = margin_frac * Hm
-        draw_w_mm = max(Wm - 2.0 * inset_x, 1e-6)
-        draw_h_mm = max(Hm - 2.0 * inset_y, 1e-6)
-
-        # Uniform scale to preserve aspect; fit both width and height
-        sx = draw_w_mm / max(Wc, 1e-6)
-        sy = draw_h_mm / max(Hc, 1e-6)
-        s = min(sx, sy)
-
-        # After uniform scale, center within the inset rectangle
-        used_w_mm = s * Wc
-        used_h_mm = s * Hc
-        offset_x = inset_x + 0.5 * (draw_w_mm - used_w_mm)
-        offset_y = inset_y + 0.5 * (draw_h_mm - used_h_mm)
-
-        # Regex to parse words like X12.34, Y-5, F900, etc.
-        word_re = re.compile(r'([A-Za-z])\s*(-?\d+(?:\.\d+)?)')
-
-        def rewrite_xy(line: str) -> str:
-            """
-            For G0/G1 motion lines, remap X/Y from canvas to board mm:
-                X' = offset_x + s * X
-                Y' = offset_y + s * Y
-            Leaves other words as-is.
-            """
-            # Preserve comments entirely
-            if ';' in line:
-                main, comment = line.split(';', 1)
-                tail = ';' + comment
-            else:
-                main, tail = line, ''
-
-            main_stripped = main.strip()
-            if not main_stripped:
-                return line
-
-            # Identify if this is a G0/G1 move
-            # Accept formats like "G0", "G00", "G1", "G01" possibly with leading spaces
-            is_motion = False
-            head = main_stripped.split()[0].upper()
-            if head.startswith('G0') or head.startswith('G1'):
-                # Make sure it's exactly G0/G00 or G1/G01
-                try:
-                    gnum = int(head[1:])
-                    is_motion = gnum in (0, 1)
-                except Exception:
-                    is_motion = False
-
-            if not is_motion:
-                return line  # pass through untouched
-
-            # Parse words and rewrite X/Y
-            out_words: list[str] = []
-            consumed = [False] * len(main)
-
-            for m in word_re.finditer(main):
-                start, end = m.span()
-                # Keep any literal text before this word
-                literal = main[len(''.join(out_words)) + sum(len(w) for w in out_words):start]
-                if literal:
-                    out_words.append(literal)
-
-                letter = m.group(1)
-                val = m.group(2)
-
-                if letter.upper() == 'X':
-                    try:
-                        x_canvas = float(val)
-                        x_mm = offset_x + s * x_canvas
-                        out_words.append(f'X{round(x_mm, 3)}')
-                    except Exception:
-                        out_words.append(m.group(0))
-                elif letter.upper() == 'Y':
-                    try:
-                        y_canvas = float(val)
-                        y_mm = offset_y + s * y_canvas
-                        out_words.append(f'Y{round(y_mm, 3)}')
-                    except Exception:
-                        out_words.append(m.group(0))
-                else:
-                    out_words.append(m.group(0))
-
-            rebuilt = ''.join(out_words)
-            # Append any trailing text after the last parsed word within 'main'
-            if len(rebuilt) < len(main):
-                rebuilt += main[len(rebuilt):]
-
-            return rebuilt + tail
-
-        # Header to ensure mm units and absolute positioning; safe for most firmwares
-        header = [
-            "; --- remapped to board millimeters ---",
-            "G90",            # absolute positioning
-        ]
-        footer = [
-            "; --- end of job ---"
-        ]
-
-        out_lines: list[str] = []
-        emitted_header = False
-        for raw in gcode_text.splitlines():
-            line = raw.rstrip("\r\n")
-
-            # Empty lines and pure comments pass through but we still emit header once
-            if not emitted_header:
-                out_lines.extend(header)
-                emitted_header = True
-
-            stripped = line.strip()
-            if not stripped or stripped.startswith(';'):
-                out_lines.append(line)
-                continue
-
-            # Rewrite G0/G1 XY, pass others through
-            out_lines.append(rewrite_xy(line))
-
-        out_lines.extend(footer)
-        # Join with '\n' to satisfy your BLE sender, which appends '\n' if missing per line
-        return "\n".join(out_lines) + "\n"
+        bs = self.board_size_mm()
+        if not bs:
+            raise RuntimeError("Board not calibrated: board size unknown.")
+        scaled = scale_gcode_to_board(gcode_text, canvas_size, bs)
+        return convert_pathfinding_gcode(scaled)
