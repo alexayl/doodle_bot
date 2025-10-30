@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-#define DEBUG_INSTRUCTION_PARSER
+// #define DEBUG_INSTRUCTION_PARSER
 
 //-------------------------
 // INSTRUCTION PARSING
