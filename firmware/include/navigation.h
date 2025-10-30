@@ -7,10 +7,10 @@
 #define DEBUG_NAV
 
 #define PI                      (3.14159265359)
-#define WHEEL_RADIUS            (10) // radius of the wheels on each stepper motor
-#define DOODLEBOT_RADIUS        (10) // distance from center of doodlebot to wheel
-#define STEPPER_CTRL_FREQ       (5) // occurrences / SEC
-#define STEPPER_CTRL_PERIOD     (1 / STEPPER_CTRL_FREQ) // seconds per occurrence
+#define WHEEL_RADIUS            (10.0) // radius of the wheels on each stepper motor
+#define DOODLEBOT_RADIUS        (50.0) // distance from center of doodlebot to wheel
+#define STEPPER_CTRL_FREQ       (5.0) // occurrences / SEC
+#define STEPPER_CTRL_PERIOD     (1.0 / STEPPER_CTRL_FREQ) // seconds per occurrence
 
 #define STEPPER_MAX_VELOCITY   (150.0f) // degrees per second
 

@@ -82,21 +82,32 @@ int MotionPlanner::discretize() {
     int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
     int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
     
+    printk("got big velos\n");
 
     StepCommand step_command;
     
     // If velocity larger than max velocity, split into multiple commands
     do {
         if (fabs(left_vel) > STEPPER_MAX_VELOCITY) {
-            left_vel -= STEPPER_MAX_VELOCITY;
-            step_command.left_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+            if (left_vel > 0) {
+                left_vel -= STEPPER_MAX_VELOCITY;
+                step_command.left_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+            } else {
+                left_vel += STEPPER_MAX_VELOCITY;  // Add for negative values
+                step_command.left_velocity = (int16_t)(-STEPPER_MAX_VELOCITY);
+            }
         } else {
             step_command.left_velocity = (int16_t)left_vel;
             left_vel = 0;
         }
         if (fabs(right_vel) > STEPPER_MAX_VELOCITY) {
-            right_vel -= STEPPER_MAX_VELOCITY;
-            step_command.right_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+            if (right_vel > 0) {
+                right_vel -= STEPPER_MAX_VELOCITY;
+                step_command.right_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+            } else {
+                right_vel += STEPPER_MAX_VELOCITY;  // Add for negative values
+                step_command.right_velocity = (int16_t)(-STEPPER_MAX_VELOCITY);
+            }
         } else {
             step_command.right_velocity = (int16_t)right_vel;
             right_vel = 0;
@@ -116,20 +127,26 @@ int MotionPlanner::discretize() {
 int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current_instruction) {
     int ret;
     current_instruction_ = current_instruction;
+    printk("in consuming instruction\n");
 
     // turn gcode into motion commands
     ret = interpolate();
     if (ret < 0) {
         printk("ERROR: Interpolation not successful.\n");
     }
+
+    printk("Interpolation complete\n");
     
     // turn motion commands into wheel velocities
     // Process all nav commands in the queue
     while(k_msgq_num_used_get(nav_queue_) > 0) {
+        printk("Processing nav command from queue\n");
         ret = discretize();
+
         if (ret < 0) {
             printk("ERROR: Discretization not successful.\n");
         }
+        printk("Discretization step complete\n");
     }
 
 
@@ -139,8 +156,9 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         #ifdef DEBUG_NAV
         printk("Starting motor control timer\n");
         #endif
-        k_timer_start(&motor_control_timer, K_NO_WAIT, K_SECONDS(STEPPER_CTRL_PERIOD));
+        k_timer_start(&motor_control_timer, K_NO_WAIT, K_MSEC(STEPPER_CTRL_PERIOD * 1000));
     }
+    printk("Motor control timer started\n");
     
     return 0;
 }
@@ -172,6 +190,11 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
 
     stepper_left_.setVelocity(step_command.left_velocity);
     stepper_right_.setVelocity(step_command.right_velocity);
+
+    printk("Velocity has been set\n");
+    
+    // Timer is already periodic, no need to restart it
+    // It will continue firing every STEPPER_CTRL_PERIOD until stopped
 }
 
 void MotionPlanner::reset_state() {
