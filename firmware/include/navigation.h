@@ -49,11 +49,8 @@ public:
         // Initialize steppers only once
         static bool initialized = false;
         if (!initialized) {
-            printk("Initializing stepper motors...\n");
             stepper_left_.initialize();
-            printk("Left stepper initialized\n");
             stepper_right_.initialize();
-            printk("Right stepper initialized\n");
             initialized = true;
         }
     };

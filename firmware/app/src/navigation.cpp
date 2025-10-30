@@ -89,8 +89,6 @@ int MotionPlanner::discretize() {
     int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
     int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
     
-    printk("got big velos\n");
-
     StepCommand step_command;
     
     // If velocity larger than max velocity, split into multiple commands
@@ -122,10 +120,7 @@ int MotionPlanner::discretize() {
 
         // push wheel velocities to step_queue_
         k_msgq_put(step_queue_, &step_command, K_FOREVER);
-        
-        #ifdef DEBUG_NAV
-        // printk("Step command queued (split): left_velocity=%d, right_velocity=%d\n", step_command.left_velocity, step_command.right_velocity);
-        #endif
+
     } while (fabs(left_vel) > STEPPER_MAX_VELOCITY || fabs(right_vel) > STEPPER_MAX_VELOCITY);
 
     return 0;
@@ -134,7 +129,6 @@ int MotionPlanner::discretize() {
 int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current_instruction) {
     int ret;
     current_instruction_ = current_instruction;
-    printk("in consuming instruction\n");
 
     // turn gcode into motion commands
     ret = interpolate();
@@ -142,18 +136,15 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         printk("ERROR: Interpolation not successful.\n");
     }
 
-    printk("Interpolation complete\n");
     
     // turn motion commands into wheel velocities
     // Process all nav commands in the queue
     while(k_msgq_num_used_get(nav_queue_) > 0) {
-        printk("Processing nav command from queue\n");
         ret = discretize();
 
         if (ret < 0) {
             printk("ERROR: Discretization not successful.\n");
         }
-        printk("Discretization step complete\n");
     }
 
 
@@ -165,7 +156,6 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         #endif
         k_timer_start(&motor_control_timer, K_NO_WAIT, K_MSEC(STEPPER_CTRL_PERIOD * 1000));
     }
-    printk("Motor control timer started\n");
     
     return 0;
 }
@@ -195,21 +185,9 @@ static void motor_control_work_handler(struct k_work *work) {
     step_command.print();
     #endif
 
-    printk("About to set left velocity: %d\n", step_command.left_velocity);
     MotionPlanner::stepper_left_.setVelocity(step_command.left_velocity);
-    printk("Left velocity set successfully\n");
-    
-    printk("About to set right velocity: %d\n", step_command.right_velocity);
     MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
-    printk("Right velocity set successfully\n");
-
-    printk("Velocity has been set\n");
 }
-
-void MotionPlanner::motor_control_handler(k_timer *timer) {
-    // This is now just a stub - the real work happens in motor_control_work_handler
-}
-
 void MotionPlanner::reset_state() {
     theta_current = 0.0f;
     #ifdef DEBUG_NAV
