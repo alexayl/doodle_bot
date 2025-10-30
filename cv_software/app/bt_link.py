@@ -121,7 +121,12 @@ class BTLink:
         lines = [ln for ln in lines if ln and not ln.startswith(";")]
 
         for line in lines:
-            data = (line + "\n").encode("utf-8")  # ensure trailing \n
+            if line.strip().upper().startswith("G91"):
+                line = "G91"
+            if line.strip().upper().startswith("G90"):
+                line = "G90"
+
+            data = (line + "\n").encode("utf-8")
             self._run(self._async_send_packet(data))
 
     def send_lines(self, lines: Iterable[str]) -> None:
@@ -218,7 +223,9 @@ class BTLink:
     async def _async_send_packet(self, payload: bytes):
         """
         Send a single packet with retry-until-ACK behavior.
-        ACK condition: last_received_packet_id == packet_id and last_received_message.lower() == "ok"
+
+        Resync rule: if device replies 'ok' but PID differs, treat as success
+        and snap our counter to the device's PID to realign.
         """
         if not self.client or not self.client.is_connected:
             raise RuntimeError("BLE not connected")
@@ -232,33 +239,36 @@ class BTLink:
                 if not self.client.is_connected:
                     raise RuntimeError("BLE connection lost")
 
-                # Important for macOS/CoreBluetooth + NUS: write without response
                 await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
                 t0 = time.time()
                 self.response_received = False
-
                 print(f"SEND::SUCCESS pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()}")
 
-                # Wait for ACK in the notification callback
+                # Wait for notify
                 while not self.response_received and (time.time() - t0) < self.timeout:
                     await asyncio.sleep(0.01)
 
-                if (
-                    self.last_received_packet_id == packet_id
-                    and (self.last_received_message or "").lower() == expected
-                ):
+                msg = (self.last_received_message or "").strip().lower()
+                pid = self.last_received_packet_id
+
+                # Exact match → success
+                if pid == packet_id and msg == expected:
                     print(f"RECEIVE::SUCCESS pid:{packet_id} msg:'{self.last_received_message}'")
                     return
-                else:
-                    print(
-                        f"RECEIVE::FAIL pid:{packet_id} nack:'{self.last_received_message}' "
-                        f"(expected '{expected}')"
-                    )
-                    await asyncio.sleep(RETRY_SLEEP_S)
-                    # retry
+
+                # Resync if device says ok but pid differs (eg. after MCU reboot)
+                if msg == expected and pid is not None and pid != packet_id:
+                    print(f"RECEIVE::RESYNC host_pid:{packet_id} device_pid:{pid} msg:'{self.last_received_message}'")
+                    # Snap our counter to the device's PID so next _next_pid() follows device
+                    self.packet_id_counter = pid % 256
+                    return
+
+                # Otherwise retry
+                print(f"RECEIVE::FAIL pid:{packet_id} nack:'{self.last_received_message}' (expected '{expected}')")
+                await asyncio.sleep(RETRY_SLEEP_S)
+
             except Exception as e:
                 print(f"BLE Error sending packet {packet_id}: {e}")
-                # Propagate hard failures that usually indicate unsupported write/transport loss
                 if "not supported" in str(e).lower() or "connection" in str(e).lower():
                     raise
                 await asyncio.sleep(ERROR_COOLDOWN_S)

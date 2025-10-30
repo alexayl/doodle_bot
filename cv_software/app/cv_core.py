@@ -8,6 +8,7 @@ import time
 from app.utils import board_to_robot
 from app.geom import fit_path_to_board as _fit_to_board
 import os
+from app.path_parse import load_gcode_file, convert_pathfinding_gcode, scale_gcode_to_board
 _POSE_ALPHA = 0.25  #  factor for updating the pose estimate
 _SCALE_ALPHA = 0.15  #  factor for updating the scale estimate
 _CONF_MIN_BOARD = 0.60  # min confidence threshold for board detection
@@ -21,10 +22,10 @@ MARKER_DICT = os.getenv("MARKER_DICT", "4x4_50").upper()
 
 BOT_BASELINE_MM = 60.0
 # testing on a board of this dims
-# KNOWN_BOARD_WIDTH_MM = 1150.0
-# KNOWN_BOARD_HEIGHT_MM = 1460.0
-KNOWN_BOARD_HEIGHT_MM = 250.0
-KNOWN_BOARD_WIDTH_MM = 200
+KNOWN_BOARD_WIDTH_MM = 1150.0
+KNOWN_BOARD_HEIGHT_MM = 1460.0
+# KNOWN_BOARD_HEIGHT_MM = 250.0
+# KNOWN_BOARD_WIDTH_MM = 200
 _MAX_REPROJ_ERR_PX = 0.8
 _MAX_SIZE_JUMP_FRAC = 0.12
 _MAX_CENTER_JUMP_PX = 30.0 

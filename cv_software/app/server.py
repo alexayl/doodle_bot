@@ -292,40 +292,34 @@ def _no_buffer(resp):
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
-def sanitize_for_firmware(gcode_text: str, force_relative: bool = True) -> str:
-    """
-    Keep: G90, G91, G0/G1 (with any args), M280.
-    Strip: G21 and anything else.
-    If force_relative and no G91 seen, prepend one.
-    """
-    out = []
-    saw_g91 = False
-    for raw in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = raw.split(";")[0].strip()
-        if not line:
-            continue
-        u = line.upper()
+# def sanitize_for_firmware(gcode_text: str, force_relative: bool = True) -> str:
+#     """
+#     Keep only: G91, G0/G1, M280. Strip G90/G21/others.
+#     If force_relative and no G91 present, prepend one.
+#     """
+#     out = []
+#     saw_g91 = False
+#     for raw in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+#         line = raw.split(";")[0].strip()
+#         if not line:
+#             continue
+#         u = line.upper()
 
-        if u.startswith("G21"):
-            continue
-        if u.startswith("G91"):
-            saw_g91 = True
-            out.append("G91")
-            continue
-        if u.startswith("G90"):
-            out.append("G90")
-            continue
-        if u.startswith(("G0", "G1")):
-            out.append(line)
-            continue
-        if u.startswith("M280"):
-            out.append(line)
-            continue
-        # drop others
+#         if u.startswith("G21") or u.startswith("G90"):
+#             out.append("G90")
+#             continue
+#         if u.startswith("G91"):
+#             saw_g91 = True
+#             out.append("G91")
+#             continue
+#         if u.startswith(("G0", "G1")) or u.startswith("M280"):
+#             out.append(line)
+#             continue
+#         # drop others
 
-    if force_relative and not saw_g91:
-        out.insert(0, "G91")
-    return "\n".join(out) + "\n"
+#     if force_relative and not saw_g91:
+#         out.insert(0, "G91")
+#     return "\n".join(out) + "\n"
 # -----------------------------------------------------------------------------#
 # Routes
 # -----------------------------------------------------------------------------#
