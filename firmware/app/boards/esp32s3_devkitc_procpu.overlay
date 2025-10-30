@@ -26,12 +26,12 @@
         label = "LEFT_STEPPER";
     };
 
-    /* Right stepper motor via A4988 driver - DISABLED (no driver available) */
+    /* Right stepper motor via A4988 driver */
     stepper_right: stepper_right {
-        status = "disabled";
+        status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        step-gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;      /* GPIO8 - Step pulses */
+        pwms = <&ledc0 4 20000 0>;                     /* 20µs period, channel 4, GPIO8 - Step pulses via PWM */
         dir-gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;       /* GPIO9 - Direction control */
         en-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;        /* GPIO10 - Enable/disable */
         label = "RIGHT_STEPPER";
@@ -41,7 +41,7 @@
     leds {
         compatible = "gpio-leds";
         led1: led_1 {
-            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>; /* GPIO11 - External LED */
+            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>; /* GPIO11 - External LED (moved from GPIO10) */
             label = "STATUS_LED";
         };
     };
@@ -65,7 +65,7 @@
         compatible = "gpio-keys";
         
         led_feedback: led_feedback {
-            gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;  /* GPIO10 - LED feedback */
+            gpios = <&gpio0 16 GPIO_ACTIVE_HIGH>;  /* GPIO16 - LED feedback (moved from GPIO10) */
             label = "LED_FEEDBACK";
         };
         
@@ -128,7 +128,12 @@
 
     channel3@3 {
         reg = <0x3>;
-        timer = <1>;
+        timer = <2>;    /* Give left stepper its own timer for high frequency PWM */
+    };
+
+    channel4@4 {
+        reg = <0x4>;
+        timer = <3>;    /* Give right stepper its own timer for high frequency PWM */
     };
 };
 
@@ -138,7 +143,8 @@
             pinmux = <LEDC_CH0_GPIO2>,   /* GPIO2 - Servo PWM on Channel 0 */
                      <LEDC_CH1_GPIO3>,   /* GPIO3 - Servo PWM on Channel 1 */
                      <LEDC_CH2_GPIO12>,  /* GPIO12 - Buzzer PWM on Channel 2 */
-                     <LEDC_CH3_GPIO5>;   /* GPIO5 - Stepper PWM on Channel 3 */
+                     <LEDC_CH3_GPIO5>,   /* GPIO5 - Left Stepper PWM on Channel 3 */
+                     <LEDC_CH4_GPIO8>;   /* GPIO8 - Right Stepper PWM on Channel 4 */
             output-enable;
         };
     };

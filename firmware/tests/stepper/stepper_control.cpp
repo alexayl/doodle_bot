@@ -1,5 +1,5 @@
 /*
- * Simple stepper motor test with GPIO pulse counting
+ * Simple Stepper Test - Alternating 90 Steps
  */
 
 #include <zephyr/kernel.h>
@@ -7,65 +7,67 @@
 
 int main(void)
 {
-    printk("Simple Stepper Test - GPIO Pulse Counting\n");
+    printk("=== STEPPER TEST - ALTERNATING 90 STEPS ===\n");
 
-    // Initialize stepper
-    int ret = stepper_init();
-    if (ret != 0) {
-        printk("ERROR: Stepper initialization failed: %d\n", ret);
-        return -1;
-    }
-    
-    printk("Stepper motor initialized successfully\n");
+    // Initialize and enable both motors
+    stepper_init();
     stepper_enable(STEPPER_LEFT);
+    stepper_enable(STEPPER_RIGHT);
+    k_sleep(K_SECONDS(1));
 
-    int cycle = 0;
     while (1) {
-        cycle++;
-        printk("\n=== Cycle %d ===\n", cycle);
-        
-        // Reset counters before movement
-        stepper_reset_counters();
-        
-        // 90° Forward
-        printk("90° Forward (expecting 1600 GPIO pulses for 800 steps)...\n");
-        stepper_start_counting(90.0f);  // Enable step counting
+        // Forward sequence
+        printk("\n>>> LEFT MOTOR FORWARD 90 steps\n");
         stepper_set_velocity(STEPPER_LEFT, 90.0f);
-        k_sleep(K_SECONDS(1));
+        k_sleep(K_MSEC(1000));  // 90 degrees at 180°/s = 0.5s
         stepper_set_velocity(STEPPER_LEFT, 0.0f);
-        stepper_stop_counting();  // Stop step counting
+        k_sleep(K_MSEC(1000));
         
-        uint32_t forward_pulses = stepper_get_gpio_pulse_count();
-        uint32_t forward_steps = stepper_get_step_count();
-        printk("Forward: %d GPIO pulses, %d steps counted\n", forward_pulses, forward_steps);
+        printk(">>> RIGHT MOTOR FORWARD 90 steps\n");
+        stepper_set_velocity(STEPPER_RIGHT, 90.0f);
+        k_sleep(K_MSEC(1000));  // 90 degrees at 180°/s = 0.5s
+        stepper_set_velocity(STEPPER_RIGHT, 0.0f);
+        k_sleep(K_MSEC(1000));
         
-        k_sleep(K_SECONDS(1));
+        printk(">>> LEFT MOTOR FORWARD 90 steps (2nd time)\n");
+        stepper_set_velocity(STEPPER_LEFT, 90.0f);
+        k_sleep(K_MSEC(1000));
+        stepper_set_velocity(STEPPER_LEFT, 0.0f);
+        k_sleep(K_MSEC(1000));
+        
+        printk(">>> RIGHT MOTOR FORWARD 90 steps (2nd time)\n");
+        stepper_set_velocity(STEPPER_RIGHT, 90.0f);
+        k_sleep(K_MSEC(1000));
+        stepper_set_velocity(STEPPER_RIGHT, 0.0f);
+        k_sleep(K_MSEC(1000));
 
-        // 90° Backward  
-        printk("90° Backward (expecting another 1600 GPIO pulses)...\n");
-        uint32_t before_backward = stepper_get_gpio_pulse_count();
-        stepper_start_counting(-90.0f);  // Enable step counting for backward
+        // Backward sequence
+        printk(">>> LEFT MOTOR BACKWARD 90 steps\n");
         stepper_set_velocity(STEPPER_LEFT, -90.0f);
-        k_sleep(K_SECONDS(1));
+        k_sleep(K_MSEC(1000));
         stepper_set_velocity(STEPPER_LEFT, 0.0f);
-        stepper_stop_counting();  // Stop step counting
+        k_sleep(K_MSEC(1000));
         
-        uint32_t total_pulses = stepper_get_gpio_pulse_count();
-        uint32_t total_steps = stepper_get_total_steps();
-        uint32_t backward_pulses = total_pulses - before_backward;
+        printk(">>> RIGHT MOTOR BACKWARD 90 steps\n");
+        stepper_set_velocity(STEPPER_RIGHT, -90.0f);
+        k_sleep(K_MSEC(1000));
+        stepper_set_velocity(STEPPER_RIGHT, 0.0f);
+        k_sleep(K_MSEC(1000));
         
-        printk("Backward: %d GPIO pulses, Total: %d pulses, %d steps\n", 
-               backward_pulses, total_pulses, total_steps);
+        printk(">>> LEFT MOTOR BACKWARD 90 steps (2nd time)\n");
+        stepper_set_velocity(STEPPER_LEFT, -90.0f);
+        k_sleep(K_MSEC(1000));
+        stepper_set_velocity(STEPPER_LEFT, 0.0f);
+        k_sleep(K_MSEC(1000));
         
-        printk("Cycle %d complete\n", cycle);
-        k_sleep(K_SECONDS(2));
+        printk(">>> RIGHT MOTOR BACKWARD 90 steps (2nd time)\n");
+        stepper_set_velocity(STEPPER_RIGHT, -90.0f);
+        k_sleep(K_MSEC(1000));
+        stepper_set_velocity(STEPPER_RIGHT, 0.0f);
+        k_sleep(K_MSEC(1000));
         
-        // Stop after a few cycles to avoid running indefinitely
-        if (cycle >= 6) {
-            printk("Test complete - stopping\n");
-            stepper_disable(STEPPER_LEFT);
-            break;
-        }
+        printk(">>> CYCLE COMPLETE - Both motors back to start\n");
+        k_sleep(K_SECONDS(1));
     }
 
     return 0;
