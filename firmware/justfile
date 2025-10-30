@@ -11,7 +11,7 @@ ESP_BOARD        := "esp32s3_devkitc/esp32s3/procpu"
 ESP_PORT         := if os() == "windows" { "COM4" } else { "/dev/ttyUSB0" }          # Silicon Labs CP210x for ESP32
 
 NRF_BOARD       := "nrf52840dk/nrf52840"
-NRF_PORT        := if os() == "windows" { "COM4" } else { "/dev/ttyACM0" }
+NRF_PORT        := if os() == "windows" { "COM4" } else { "/dev/tty.usbmodem0010502415781" }
 
 CMAKE_CACHE_ARGS := "-- -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 

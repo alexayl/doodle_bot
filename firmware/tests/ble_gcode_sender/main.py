@@ -11,7 +11,7 @@ import argparse
 from typing import List
 from packetlib import BLEPacketHandler
 
-DEVICE_NAME = "Zephyr"
+DEVICE_NAME = "BOO"
 
 default_commands = [
     b"G1 X20 Y90\n",
