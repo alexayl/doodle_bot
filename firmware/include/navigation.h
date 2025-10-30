@@ -4,7 +4,7 @@
 #include "peripheral_wrappers.h"
 #include <zephyr/kernel.h>
 
-#define DEBUG_NAV
+// #define DEBUG_NAV
 
 #define PI                      (3.14159265359)
 #define WHEEL_RADIUS            (10.0) // radius of the wheels on each stepper motor

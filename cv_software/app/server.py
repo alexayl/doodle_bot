@@ -35,8 +35,11 @@ STREAM_JPEG_QUALITY = 75
 _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
 _MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
 
-# If you want to completely disable legacy move streaming (dx,dy,dz) and only send G-code:
-DISABLE_MOVE_STREAMING = True
+# Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
+PATH_CANVAS_SIZE = (
+    float(os.getenv("PATH_CANVAS_WIDTH", "575")),
+    float(os.getenv("PATH_CANVAS_HEIGHT", "730")),
+)
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
@@ -62,7 +65,7 @@ def get_cam() -> Optional[ThreadedCamera]:
 # -----------------------------------------------------------------------------#
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
-bt = BTLink(port=os.getenv("BT_PORT", "/dev/ttyUSB0"), baud=int(os.getenv("BT_BAUD", "115200")))
+bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
 @contextmanager
 def _in_dir(path: str):
     old = os.getcwd()
@@ -89,7 +92,7 @@ def _as_waypoints(seq) -> List[Waypoint]:
 # -----------------------------------------------------------------------------#
 def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
     """
-    Convert ("move", dx,dy, dz) incremental ops to [0..1] normalized waypoints.
+    Convert ("move", dx, dy) incremental ops to [0..1] normalized waypoints.
     """
     x = y = 0.0
     pts: List[tuple[float, float]] = []
@@ -183,9 +186,6 @@ def _read_gcode_text(path_or_name: str) -> str:
 # -----------------------------------------------------------------------------#
 _cv_thread: Optional[threading.Thread] = None
 
-def _clamp(v: float, m: float) -> float:
-    return -m if v < -m else (m if v > m else v)
-
 def _process_frame_once(frame) -> tuple[bool, float]:
     t0 = time.perf_counter()
     try:
@@ -209,13 +209,15 @@ def _cv_worker():
         pass
 
     cam = get_cam()
-    batch_vertices = 12
-    idle_timeout_s = 1.0
-
-    pen_is_down = False
-    sent_initial_pen = False
+    # Legacy move streaming is removed; BLE now only receives full G-code packets.
 
     while True:
+        # if not bt.client or not bt.client.is_connected:
+        # try:
+        #     bt.connect()
+        # except Exception:
+        #     time.sleep(1.0)
+        #     continue
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
@@ -223,59 +225,11 @@ def _cv_worker():
 
         frame = cam.get_latest_good()
         if frame is None:
-            time.sleep(0.004)
+            time.sleep(0.0004)
             continue
 
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
-
-        # Legacy incremental streaming (optional). Leave enabled = False when sending raw G-code instead.
-        if RUN.active and not DISABLE_MOVE_STREAMING:
-            bt.wait_idle(idle_timeout_s)
-
-            pose = cvp.get_pose_mm()
-            verts: List[Tuple[float, float, int]] = []
-            for _ in range(batch_vertices):
-                step = RUN.follower.step(pose)  # (fwd, left) in ROBOT frame
-                if step is None:
-                    if pen_is_down:
-                        verts.append((0.0, 0.0, +1))
-                        pen_is_down = False
-                    RUN.stop()
-                    sent_initial_pen = False
-                    break
-
-                st = cvp.get_state()
-                ok_conf = (
-                    st["calibrated"]
-                    and (st["board_confidence"] is None or st["board_confidence"] >= 0.60)
-                    and st["bot_pose"] is not None
-                    and st["bot_pose"]["confidence"] >= 0.60
-                )
-                if ok_conf and pose is not None:
-                    err = RUN.follower.current_error(pose)
-                    if err is not None:
-                        ex, ey, _tgt = err
-                        cx = _clamp(_K_GAIN * ex, _MAX_CORR_MM)
-                        cy = _clamp(_K_GAIN * ey, _MAX_CORR_MM)
-                        corr = cvp.corrected_delta_for_bt((cx, cy), rotate_into_bot_frame=True)
-                        if corr is not None:
-                            step = (step[0] + float(corr[0]), step[1] + float(corr[1]))
-
-                dz = 0
-                if not sent_initial_pen:
-                    verts.append((0.0, 0.0, -1))
-                    pen_is_down = True
-                    sent_initial_pen = True
-
-                verts.append((float(step[0]), float(step[1]), dz))
-                pose = cvp.get_pose_mm()
-
-            if verts:
-                try:
-                    bt.send_moves_with_dz(verts)
-                except Exception:
-                    pass
 
         time.sleep(0.004)
 
@@ -338,6 +292,34 @@ def _no_buffer(resp):
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
+# def sanitize_for_firmware(gcode_text: str, force_relative: bool = True) -> str:
+#     """
+#     Keep only: G91, G0/G1, M280. Strip G90/G21/others.
+#     If force_relative and no G91 present, prepend one.
+#     """
+#     out = []
+#     saw_g91 = False
+#     for raw in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+#         line = raw.split(";")[0].strip()
+#         if not line:
+#             continue
+#         u = line.upper()
+
+#         if u.startswith("G21") or u.startswith("G90"):
+#             out.append("G90")
+#             continue
+#         if u.startswith("G91"):
+#             saw_g91 = True
+#             out.append("G91")
+#             continue
+#         if u.startswith(("G0", "G1")) or u.startswith("M280"):
+#             out.append(line)
+#             continue
+#         # drop others
+
+#     if force_relative and not saw_g91:
+#         out.insert(0, "G91")
+#     return "\n".join(out) + "\n"
 # -----------------------------------------------------------------------------#
 # Routes
 # -----------------------------------------------------------------------------#
@@ -357,8 +339,6 @@ def erase():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("erase"))
 
         # 1) Build normalized path for local preview/control (unchanged)
@@ -372,9 +352,10 @@ def erase():
             else:
                 try:
                     gcode_str = _read_gcode_text("erase")
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -396,8 +377,6 @@ def draw():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("draw"))
 
         uploaded_file = request.files.get("file")
@@ -436,9 +415,10 @@ def draw():
                 try:
                     src_for_gcode = gcode_path if gcode_path else "draw"
                     gcode_str = _read_gcode_text(src_for_gcode)
-                    # Convert pathfinding G-code (M3/M5) to firmware format (M280)
-                    firmware_gcode = convert_pathfinding_gcode(gcode_str)
-                    bt.send_gcode(firmware_gcode, wait_for_ack=False)
+                    
+                    # Normalize and scale to firmware G-code using current calibration
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -466,7 +446,7 @@ def stream():
 def _shutdown():
     try:
         RUN.stop()
-        bt.stop()
+        bt.close()  # Use close() instead of stop()
     except Exception:
         pass
     cam = get_cam()

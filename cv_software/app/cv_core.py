@@ -7,7 +7,8 @@ import math
 import time
 from app.utils import board_to_robot
 from app.geom import fit_path_to_board as _fit_to_board
-
+import os
+from app.path_parse import load_gcode_file, convert_pathfinding_gcode, scale_gcode_to_board
 _POSE_ALPHA = 0.25  #  factor for updating the pose estimate
 _SCALE_ALPHA = 0.15  #  factor for updating the scale estimate
 _CONF_MIN_BOARD = 0.60  # min confidence threshold for board detection
@@ -16,12 +17,15 @@ _CONF_MIN_BOT = 0.60  # min confidence threshold for bot detection
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
 
+# Options: "4x4_50", "5x5_100", "6x6_250", "apriltag_36h11"
+MARKER_DICT = os.getenv("MARKER_DICT", "4x4_50").upper()
+
 BOT_BASELINE_MM = 60.0
 # testing on a board of this dims
-# KNOWN_BOARD_WIDTH_MM = 1150.0
-# KNOWN_BOARD_HEIGHT_MM = 1460.0
-KNOWN_BOARD_HEIGHT_MM = 250.0
-KNOWN_BOARD_WIDTH_MM = 200
+KNOWN_BOARD_WIDTH_MM = 1150.0
+KNOWN_BOARD_HEIGHT_MM = 1460.0
+# KNOWN_BOARD_HEIGHT_MM = 250.0
+# KNOWN_BOARD_WIDTH_MM = 200
 _MAX_REPROJ_ERR_PX = 0.8
 _MAX_SIZE_JUMP_FRAC = 0.12
 _MAX_CENTER_JUMP_PX = 30.0 
@@ -49,7 +53,39 @@ class BotPose:
     confidence: float = 0.0
 
 def _aruco_dict():
-    return cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    """Get ArUco/AprilTag dictionary based on MARKER_DICT setting"""
+    dict_name = MARKER_DICT.replace("X", "x")  # Normalize
+    
+    # Map common names to OpenCV constants
+    dict_map = {
+        "4x4_50": cv2.aruco.DICT_4X4_50,
+        "4x4_100": cv2.aruco.DICT_4X4_100,
+        "4x4_250": cv2.aruco.DICT_4X4_250,
+        "4x4_1000": cv2.aruco.DICT_4X4_1000,
+        "5x5_50": cv2.aruco.DICT_5X5_50,
+        "5x5_100": cv2.aruco.DICT_5X5_100,
+        "5x5_250": cv2.aruco.DICT_5X5_250,
+        "5x5_1000": cv2.aruco.DICT_5X5_1000,
+        "6x6_50": cv2.aruco.DICT_6X6_50,
+        "6x6_100": cv2.aruco.DICT_6X6_100,
+        "6x6_250": cv2.aruco.DICT_6X6_250,
+        "6x6_1000": cv2.aruco.DICT_6X6_1000,
+        "7x7_50": cv2.aruco.DICT_7X7_50,
+        "7x7_100": cv2.aruco.DICT_7X7_100,
+        "7x7_250": cv2.aruco.DICT_7X7_250,
+        "7x7_1000": cv2.aruco.DICT_7X7_1000,
+    }
+    
+    if hasattr(cv2.aruco, 'DICT_APRILTAG_36h11'):
+        dict_map.update({
+            "apriltag_36h11": cv2.aruco.DICT_APRILTAG_36h11,
+            "apriltag_36h10": cv2.aruco.DICT_APRILTAG_36h10,
+            "apriltag_25h9": cv2.aruco.DICT_APRILTAG_25h9,
+            "apriltag_16h5": cv2.aruco.DICT_APRILTAG_16h5,
+        })
+    
+    dict_type = dict_map.get(dict_name.lower(), cv2.aruco.DICT_5X5_100)
+    return cv2.aruco.getPredefinedDictionary(dict_type)
 
 def _aruco_params():
     if hasattr(cv2.aruco, "DetectorParameters"):
@@ -420,3 +456,18 @@ class CVPipeline:
         px = st["bot_pose"]["center_board_px"]
         mpp = float(st["mm_per_px"])
         return (px[0] * mpp, px[1] * mpp), float(st["bot_pose"]["heading_rad"]), float(st["bot_pose"]["confidence"])
+    def build_firmware_gcode(self, gcode_text: str, canvas_size: Tuple[float, float] = (575.0, 730.0)) -> str:
+        """
+        Convert pathfinding G-code (canvas units) into firmware-ready, relative G-code
+        using the current calibration.
+
+        - Scales G0/G1 X/Y from canvas units to detected board mm.
+        - Normalizes to firmware subset: enforce G91 and map any legacy M3/M5 to M280.
+
+        Returns the G-code string ready to transmit. Requires a valid board size.
+        """
+        bs = self.board_size_mm()
+        if not bs:
+            raise RuntimeError("Board not calibrated: board size unknown.")
+        scaled = scale_gcode_to_board(gcode_text, canvas_size, bs)
+        return convert_pathfinding_gcode(scaled)

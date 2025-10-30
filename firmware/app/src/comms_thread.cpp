@@ -21,7 +21,7 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
 
     int ret = 0;
 
-    #ifdef DEBUG_BLE
+    #ifdef DEBUG_COMMS
     printk("COMMS_HANDLER: Received data of length %d: ", len);
     for (int i = 0; i < len; i++) {
         printk("%02X ", ((uint8_t*)data)[i]);
@@ -45,7 +45,7 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
         // Send NACK
         char nack[sizeof("afail\n")] = "afail\n";
         nack[0] = expected_packet_id;
-        #ifdef DEBUG_BLE
+        #ifdef DEBUG
             printk("Sending NACK: %s (id:%d)\n", nack, (uint8_t)nack[0]);
         #endif
         g_bleService->send(nack, sizeof(nack));

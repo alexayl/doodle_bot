@@ -6,7 +6,7 @@
 #include <zephyr/bluetooth/services/nus.h>
 #include <zephyr/sys/printk.h>
 
-// #define	 DEBUG_BLE
+#define	 DEBUG_BLE
 
 // Function pointer type for receive handler
 typedef void (*ReceiveHandler)(const void* data, uint16_t len, k_msgq *q);
@@ -50,7 +50,7 @@ private:
 	ReceiveHandler receiveHandler;	///< Custom handler function to process received BLE data
 
 	// Static members for BLE service
-    static constexpr const char* DEVICE_NAME = "DOODLEBOT";
+    static constexpr const char* DEVICE_NAME = "BOO";
     static constexpr size_t DEVICE_NAME_LEN = sizeof(DEVICE_NAME) - 1;
 
     static const struct bt_data ad[];
