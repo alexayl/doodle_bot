@@ -19,13 +19,13 @@ int main(void)
         // Forward sequence
         printk("\n>>> LEFT MOTOR FORWARD 90 steps\n");
         stepper_set_velocity(STEPPER_LEFT, 90.0f);
-        k_sleep(K_MSEC(1000));  // 90 degrees at 180°/s = 0.5s
+        k_sleep(K_MSEC(1000));
         stepper_set_velocity(STEPPER_LEFT, 0.0f);
         k_sleep(K_MSEC(1000));
         
         printk(">>> RIGHT MOTOR FORWARD 90 steps\n");
         stepper_set_velocity(STEPPER_RIGHT, 90.0f);
-        k_sleep(K_MSEC(1000));  // 90 degrees at 180°/s = 0.5s
+        k_sleep(K_MSEC(1000));
         stepper_set_velocity(STEPPER_RIGHT, 0.0f);
         k_sleep(K_MSEC(1000));
         

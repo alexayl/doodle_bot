@@ -154,6 +154,7 @@ test-esp-servo: (_test_driver "esp" "servo" "CONFIG_SERVO_TEST")
 test-esp-led: (_test_driver "esp" "led" "CONFIG_LED_TEST")
 test-esp-pwm-buzzer: (_test_driver "esp" "pwm-buzzer" "CONFIG_PWM_BUZZER_DRIVER_TEST")
 test-esp-stepper: (_test_driver "esp" "stepper" "CONFIG_STEPPER_TEST")
+test-esp-dfplayer: (_test_driver "esp" "dfplayer" "CONFIG_DFPLAYER_TEST")
 
 # Run comprehensive peripheral demo showing all components
 demo-esp: _verify_workspace clean

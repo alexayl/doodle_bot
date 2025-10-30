@@ -246,8 +246,19 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
     /* Small delay to ensure direction is set before stepping starts */
     k_usleep(10);  /* 10 microseconds delay */
 
-    /* Start/stop stepping */
-    if (step_freq_hz > 0 && motor_enabled) {
+    /* Start/stop stepping with automatic power management */
+    if (step_freq_hz > 0) {
+        /* Enable motor only when moving */
+        if (!motor_enabled) {
+            gpio_pin_set_dt(en, 1);  // Enable motor for movement
+            if (motor == STEPPER_LEFT) {
+                left_enabled = true;
+            } else if (motor == STEPPER_RIGHT) {
+                right_enabled = true;
+            }
+            LOG_INF("Motor %d enabled for movement", motor);
+        }
+        
         /* 
          * PWM generates step pulses directly:
          * - Period = 1/step_freq_hz seconds
@@ -273,8 +284,19 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
             movement_step_freq_hz = step_freq_hz;  /* Save frequency for calculations */
         }
     } else {
-        /* Stop PWM */
+        /* Stop PWM and disable motor to prevent heating */
         pwm_set_dt(pwm, 0, 0);
+        
+        /* Disable motor when stopped to prevent overheating */
+        if (motor_enabled) {
+            gpio_pin_set_dt(en, 0);  // Disable motor when stopped
+            if (motor == STEPPER_LEFT) {
+                left_enabled = false;
+            } else if (motor == STEPPER_RIGHT) {
+                right_enabled = false;
+            }
+            LOG_INF("Motor %d disabled to prevent heating", motor);
+        }
     }
 
     return 0;
