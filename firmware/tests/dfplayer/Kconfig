@@ -1,0 +1,12 @@
+# Configuration for DFPlayer test
+
+config DFPLAYER_TEST
+    bool "Enable DFPlayer Mini test"
+    default y
+    select UART
+    select SERIAL
+    help
+      Enable the DFPlayer Mini audio test application.
+      Requires DFPlayer Mini module connected via UART1.
+
+source "Kconfig.zephyr"

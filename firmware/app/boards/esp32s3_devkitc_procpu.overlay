@@ -37,6 +37,14 @@
         label = "RIGHT_STEPPER";
     };
 
+    /* DFPlayer Mini audio module */
+    dfplayer: dfplayer {
+        compatible = "dfplayer-mini";
+        uart = <&uart1>;
+        label = "DFPLAYER_MINI";
+        status = "okay";
+    };
+
     /* GPIO LED configuration */
     leds {
         compatible = "gpio-leds";
@@ -148,4 +156,18 @@
             output-enable;
         };
     };
+
+    uart1_default: uart1_default {
+        group1 {
+            pinmux = <UART1_TX_GPIO17>,  /* GPIO17 - UART1 TX to DFPlayer RX */
+                     <UART1_RX_GPIO18>;  /* GPIO18 - UART1 RX to DFPlayer TX */
+        };
+    };
+};
+
+&uart1 {
+    status = "okay";
+    current-speed = <9600>;
+    pinctrl-0 = <&uart1_default>;
+    pinctrl-names = "default";
 };
