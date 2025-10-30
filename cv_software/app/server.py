@@ -361,7 +361,7 @@ def erase():
                     
                     # Normalize and scale to firmware G-code using current calibration
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(sanitize_for_firmware(firmware_gcode, force_relative=False))
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -424,7 +424,7 @@ def draw():
                     
                     # Normalize and scale to firmware G-code using current calibration
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(sanitize_for_firmware(firmware_gcode, force_relative=False))
+                    bt.send_gcode(firmware_gcode)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
