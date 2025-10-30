@@ -13,8 +13,15 @@ k_msgq* MotionPlanner::step_queue_ = nullptr;
 Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
 Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
 
-// Timer definition
-K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
+// Work queue for motor control (to avoid ISR context issues)
+static void motor_control_work_handler(struct k_work *work);
+K_WORK_DEFINE(motor_control_work, motor_control_work_handler);
+
+// Timer definition - now just triggers work instead of doing heavy lifting
+void motor_control_timer_handler(k_timer *timer) {
+    k_work_submit(&motor_control_work);
+}
+K_TIMER_DEFINE(motor_control_timer, motor_control_timer_handler, NULL);
 
 /* MOTION PLANNER */
 
@@ -164,20 +171,20 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
 }
 
 
-void MotionPlanner::motor_control_handler(k_timer *timer) {
-
+// Work handler - runs in thread context, not ISR context
+static void motor_control_work_handler(struct k_work *work) {
     #ifdef DEBUG_NAV
-    printk("Motor control handler triggered\n");
+    printk("Motor control work handler triggered\n");
     #endif
 
     // get step command
     StepCommand step_command;
-    if (k_msgq_get(step_queue_, &step_command, K_NO_WAIT)) {
+    if (k_msgq_get(MotionPlanner::step_queue_, &step_command, K_NO_WAIT)) {
         #ifdef DEBUG_NAV
         printk("No more step commands, stopping steppers\n");
         #endif
-        stepper_left_.stop();
-        stepper_right_.stop();
+        MotionPlanner::stepper_left_.stop();
+        MotionPlanner::stepper_right_.stop();
         k_timer_stop(&motor_control_timer);
         return;
     }
@@ -188,13 +195,19 @@ void MotionPlanner::motor_control_handler(k_timer *timer) {
     step_command.print();
     #endif
 
-    stepper_left_.setVelocity(step_command.left_velocity);
-    stepper_right_.setVelocity(step_command.right_velocity);
+    printk("About to set left velocity: %d\n", step_command.left_velocity);
+    MotionPlanner::stepper_left_.setVelocity(step_command.left_velocity);
+    printk("Left velocity set successfully\n");
+    
+    printk("About to set right velocity: %d\n", step_command.right_velocity);
+    MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
+    printk("Right velocity set successfully\n");
 
     printk("Velocity has been set\n");
-    
-    // Timer is already periodic, no need to restart it
-    // It will continue firing every STEPPER_CTRL_PERIOD until stopped
+}
+
+void MotionPlanner::motor_control_handler(k_timer *timer) {
+    // This is now just a stub - the real work happens in motor_control_work_handler
 }
 
 void MotionPlanner::reset_state() {

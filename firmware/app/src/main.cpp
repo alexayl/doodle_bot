@@ -6,6 +6,8 @@
 #include "comms_thread.h"
 #include "navigation.h"
 #include "state_task.h"
+#include "stepper.h"
+
 
 /* QUEUE MANAGEMENT */
 
@@ -39,6 +41,11 @@ static struct k_thread state_thread_data;
 static int hardware_init() {
    
     // TODO: init hardware peripherals as they are added
+        int ret = stepper_init();
+    if (ret < 0) {
+        printk("ERROR: Stepper initialization failed: %d\n", ret);
+        return ret;
+    }
     
     return 0;
 }

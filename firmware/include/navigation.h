@@ -46,20 +46,29 @@ public:
     MotionPlanner(k_msgq *nav_queue, k_msgq *step_queue) {
         nav_queue_ = nav_queue;
         step_queue_ = step_queue;
-        stepper_left_.initialize();
-        stepper_right_.initialize();
+        // Initialize steppers only once
+        static bool initialized = false;
+        if (!initialized) {
+            printk("Initializing stepper motors...\n");
+            stepper_left_.initialize();
+            printk("Left stepper initialized\n");
+            stepper_right_.initialize();
+            printk("Right stepper initialized\n");
+            initialized = true;
+        }
     };
     int consumeInstruction(const InstructionParser::GCodeCmd &) override;
 
     static void motor_control_handler(k_timer *timer);
     static void reset_state();  // Reset robot state (heading, position, etc.)
 
-private:
+    // Public static members for work handler access
     static k_msgq *nav_queue_;   // r, theta
     static k_msgq *step_queue_;  // vL, vR
-
     static Stepper stepper_left_;
     static Stepper stepper_right_;
+
+private:
 
     // interpolation
     static float theta_current;
