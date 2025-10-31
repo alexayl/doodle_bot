@@ -23,7 +23,9 @@ private:
 
 class Servo : public Peripheral {
 public:
-    Servo(const char* alias) : alias_(alias), dev_(nullptr) {}
+    Servo(const char* alias) : alias_(alias) {
+        dev_ = servo_init_by_alias(alias_); 
+    }
     
     void initialize() override { 
         dev_ = servo_init_by_alias(alias_); 

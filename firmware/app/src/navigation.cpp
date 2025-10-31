@@ -269,7 +269,7 @@ int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) 
 
     // consume servo instruction
     if (gCodeCmd.args[0].letter == 'P') {
-        int servo_position = (int)gCodeCmd.args[0].value;
+        int servo_position = (int)gCodeCmd.args[1].value;
         #ifdef DEBUG_NAV
         printk("ServoMover: Moving servo %s to position %d\n", servo_.getAlias(), servo_position);
         #endif
@@ -306,6 +306,8 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
     MotionPlanner motionPlanner(nav_cmd_msgq, step_cmd_msgq);
     ServoMover marker("servom");  // servo marker
     ServoMover eraser("servoe");  // servo eraser
+    // marker.servo_.initialize();
+    // eraser.servo_.initialize();
 
 
     while(1) {
