@@ -178,6 +178,7 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
     }
 
     // turn motion commands into wheel velocities
+    // process all nav commands in the queue
     while(k_msgq_num_used_get(nav_queue_) > 0) {
         ret = discretize();
 
@@ -264,8 +265,19 @@ void MotionPlanner::reset_state() {
 /* SERVO */
 
 int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
+    int ret = 0;
 
     // consume servo instruction
+    if (gCodeCmd.args[0].letter == 'P') {
+        int servo_position = (int)gCodeCmd.args[0].value;
+        #ifdef DEBUG_NAV
+        printk("ServoMover: Moving servo %s to position %d\n", servo_.getAlias(), servo_position);
+        #endif
+        servo_.setAngle(servo_position);
+    } else {
+        printk("ServoMover: Unrecognized argument letter %c\n", gCodeCmd.args[0].letter);
+        ret = -EINVAL;
+    }
     
     // send ack command back
     if (g_bleService) {
@@ -276,10 +288,9 @@ int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) 
         #endif
         g_bleService->send(ack, sizeof(ack));
     }
-    
-    return 0;
-}
 
+    return ret;
+}
 
 
 /* THREAD */
@@ -318,7 +329,6 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
         } else if (code == 'M' && num == 280) {
             if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 0) {
                 marker.consumeInstruction(current_instruction);
-                
                 
             } else if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 1) {
                 eraser.consumeInstruction(current_instruction);

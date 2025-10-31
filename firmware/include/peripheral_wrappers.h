@@ -33,6 +33,8 @@ public:
         return servo_set_angle(dev_, angle); 
     }
 
+    const char *getAlias() const { return alias_; }
+
 private:
     const char* alias_;
     const struct device* dev_;
