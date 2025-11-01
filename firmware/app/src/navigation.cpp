@@ -5,7 +5,7 @@
 
 /* STATIC MEMBERS */
 InstructionParser::GCodeCmd InstructionHandler::current_instruction_;
-float MotionPlanner::theta_current = 0.0f;
+float MotionPlanner::theta_current_ = 0.0f;
 
 k_msgq* MotionPlanner::nav_queue_ = nullptr;
 k_msgq* MotionPlanner::step_queue_ = nullptr;
@@ -13,11 +13,9 @@ k_msgq* MotionPlanner::step_queue_ = nullptr;
 Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
 Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
 
-// Work queue for motor control (to avoid ISR context issues)
 static void motor_control_work_handler(struct k_work *work);
 K_WORK_DEFINE(motor_control_work, motor_control_work_handler);
 
-// Timer definition - now just triggers work instead of doing heavy lifting
 void motor_control_timer_handler(k_timer *timer) {
     k_work_submit(&motor_control_work);
 }
@@ -27,39 +25,35 @@ K_TIMER_DEFINE(motor_control_timer, motor_control_timer_handler, NULL);
 
 int MotionPlanner::interpolate() {
 
-    // Using linear interpolation
+    // See docs/firmware/differential_drive_kinematics.md for derivation
+
     int x_delta = current_instruction_.args[0].value;
     int y_delta = current_instruction_.args[1].value;
     
-    // calculate r
-    float r_delta = (float)sqrt(pow(x_delta, 2) + pow(y_delta, 2));
+    float r_delta = sqrtf((float)(x_delta * x_delta + y_delta * y_delta));
 
-    // calculate theta
-    float theta_desired = (float)atan2(y_delta, x_delta);
+    float theta_prime = atan2f((float)y_delta, (float)x_delta);
+    float theta_delta = theta_prime - theta_current_;
 
-    // calculate change in delta
-    float theta_delta = theta_desired - theta_current;
-
-    // normalize theta (-PI, PI)
+    // normalize angle to (-pi, pi) range
     while (theta_delta > PI) {
-        theta_delta -= 2 * PI;
+        theta_delta -= 2.0f * PI;
     }
     while (theta_delta < -PI) {
-        theta_delta += 2 * PI;
+        theta_delta += 2.0f * PI;
     }
     
-    // Update current heading after turn
-    theta_current = theta_desired;
+    // update current heading state
+    theta_current_ = theta_prime;
     
-    // Generate TWO commands: first turn in place, then move forward
-    // Command 1: Turn in place (r=0, theta=theta_delta)
-    if (fabs(theta_delta) > 0.01) {  // Only turn if angle is significant
+    // turn
+    if (fabsf(theta_delta) > 0.01f) {
         NavCommand turn_command = {0.0f, theta_delta};
         k_msgq_put(nav_queue_, &turn_command, K_FOREVER);
     }
     
-    // Command 2: Move forward (r=r_delta, theta=0)
-    if (r_delta > 0.01) {  // Only move if distance is significant
+    // forward movement
+    if (r_delta > 0.01f) { 
         NavCommand move_command = {r_delta, 0.0f};
         k_msgq_put(nav_queue_, &move_command, K_FOREVER);
     }
@@ -69,59 +63,62 @@ int MotionPlanner::interpolate() {
 
 int MotionPlanner::discretize() {
 
-    // take navigation commands from nav_queue_
     NavCommand nav_command;
     k_msgq_get(nav_queue_, &nav_command, K_FOREVER);
 
-    // Differential drive: arc length for each wheel
-    // l_dist = distance left wheel travels = R_left * theta
-    // r_dist = distance right wheel travels = R_right * theta
-    // Where R_left/right are the radii from the ICC (instantaneous center of curvature)
-    
-    // For a turn by angle theta_delta and forward movement r:
-    // Left wheel:  arc = r - (theta_delta * DOODLEBOT_RADIUS)
-    // Right wheel: arc = r + (theta_delta * DOODLEBOT_RADIUS)
-    
-    float l_dist = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
-    float r_dist = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
-    
-    // Convert to velocities
-    int left_vel = (int)(l_dist * STEPPER_CTRL_FREQ);
-    int right_vel = (int)(r_dist * STEPPER_CTRL_FREQ);
+    // See docs/firmware/differential_drive_kinematics.md for derivation
+
+    // step 2
+    float d_left = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
+    float d_right = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
+
+    // step 3
+    float v_left = d_left * STEPPER_CTRL_FREQ;   // mm/s
+    float v_right = d_right * STEPPER_CTRL_FREQ; // mm/s
     
     StepCommand step_command;
-    
-    // If velocity larger than max velocity, split into multiple commands
+
+    // rate limiting subsequent steps to prevent high velocity movement
     do {
-        if (fabs(left_vel) > STEPPER_MAX_VELOCITY) {
-            if (left_vel > 0) {
-                left_vel -= STEPPER_MAX_VELOCITY;
-                step_command.left_velocity = (int16_t)STEPPER_MAX_VELOCITY;
+        float current_v_left, current_v_right;
+        
+        if (fabsf(v_left) > MAX_LINEAR_VELOCITY) {
+            if (v_left > 0) {
+                v_left -= MAX_LINEAR_VELOCITY;
+                current_v_left = MAX_LINEAR_VELOCITY;
             } else {
-                left_vel += STEPPER_MAX_VELOCITY;  // Add for negative values
-                step_command.left_velocity = (int16_t)(-STEPPER_MAX_VELOCITY);
+                v_left += MAX_LINEAR_VELOCITY;
+                current_v_left = -MAX_LINEAR_VELOCITY;
             }
         } else {
-            step_command.left_velocity = (int16_t)left_vel;
-            left_vel = 0;
-        }
-        if (fabs(right_vel) > STEPPER_MAX_VELOCITY) {
-            if (right_vel > 0) {
-                right_vel -= STEPPER_MAX_VELOCITY;
-                step_command.right_velocity = (int16_t)STEPPER_MAX_VELOCITY;
-            } else {
-                right_vel += STEPPER_MAX_VELOCITY;  // Add for negative values
-                step_command.right_velocity = (int16_t)(-STEPPER_MAX_VELOCITY);
-            }
-        } else {
-            step_command.right_velocity = (int16_t)right_vel;
-            right_vel = 0;
+            current_v_left = v_left;
+            v_left = 0.0f;
         }
 
-        // push wheel velocities to step_queue_
+        if (fabsf(v_right) > MAX_LINEAR_VELOCITY) {
+            if (v_right > 0) {
+                v_right -= MAX_LINEAR_VELOCITY;
+                current_v_right = MAX_LINEAR_VELOCITY;
+            } else {
+                v_right += MAX_LINEAR_VELOCITY;
+                current_v_right = -MAX_LINEAR_VELOCITY;
+            }
+        } else {
+            current_v_right = v_right;
+            v_right = 0.0f;
+        }
+        
+        // step 4
+        float omega_left_rad = current_v_left / WHEEL_RADIUS;
+        float omega_right_rad = current_v_right / WHEEL_RADIUS;
+        
+        // step 5
+        step_command.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
+        step_command.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+        
         k_msgq_put(step_queue_, &step_command, K_FOREVER);
 
-    } while (fabs(left_vel) > STEPPER_MAX_VELOCITY || fabs(right_vel) > STEPPER_MAX_VELOCITY);
+    } while (fabsf(v_left) > MAX_LINEAR_VELOCITY || fabsf(v_right) > MAX_LINEAR_VELOCITY);
 
     return 0;
 }
@@ -136,9 +133,7 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         printk("ERROR: Interpolation not successful.\n");
     }
 
-    
     // turn motion commands into wheel velocities
-    // Process all nav commands in the queue
     while(k_msgq_num_used_get(nav_queue_) > 0) {
         ret = discretize();
 
@@ -147,21 +142,17 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         }
     }
 
-
     // wheel velocities are consumed by motor_control_handler()
-    // start the timer that runs it if it is not currently running
     if (!k_timer_remaining_ticks(&motor_control_timer)) {
         #ifdef DEBUG_NAV
         printk("Starting motor control timer\n");
         #endif
         k_timer_start(&motor_control_timer, K_NO_WAIT, K_MSEC(STEPPER_CTRL_PERIOD * 1000));
     }
-    
+
     return 0;
 }
 
-
-// Work handler - runs in thread context, not ISR context
 static void motor_control_work_handler(struct k_work *work) {
     #ifdef DEBUG_NAV
     printk("Motor control work handler triggered\n");
@@ -189,7 +180,7 @@ static void motor_control_work_handler(struct k_work *work) {
     MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
 }
 void MotionPlanner::reset_state() {
-    theta_current = 0.0f;
+    theta_current_ = 0.0f;
     #ifdef DEBUG_NAV
     printk("MotionPlanner: State reset\n");
     #endif
