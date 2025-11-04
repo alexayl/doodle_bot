@@ -2,6 +2,7 @@
 #include <math.h>
 #include "navigation.h"
 #include "instruction_parser.h"
+#include "comms_thread.h"
 
 /* STATIC MEMBERS */
 InstructionParser::GCodeCmd InstructionHandler::current_instruction_;
@@ -147,7 +148,6 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         }
     }
 
-
     // wheel velocities are consumed by motor_control_handler()
     // start the timer that runs it if it is not currently running
     if (!k_timer_remaining_ticks(&motor_control_timer)) {
@@ -155,6 +155,13 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
         printk("Starting motor control timer\n");
         #endif
         k_timer_start(&motor_control_timer, K_NO_WAIT, K_MSEC(STEPPER_CTRL_PERIOD * 1000));
+    }
+
+    // Send ACK with packet ID as first byte
+    if (g_bleService) {
+        char ack[sizeof("aok\n")] = "aok\n";
+        ack[0] = current_instruction_.packet_id;
+        g_bleService->send(ack, sizeof(ack));
     }
     
     return 0;
@@ -200,6 +207,12 @@ void MotionPlanner::reset_state() {
 
 int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
 
+    // send ack command back
+    if (g_bleService) {
+        char ack[sizeof("aok\n")] = "aok\n";
+        ack[0] = current_instruction_.packet_id;
+        g_bleService->send(ack, sizeof(ack));
+    }
     
     return 0;
 }
