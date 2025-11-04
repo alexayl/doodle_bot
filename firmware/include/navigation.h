@@ -20,6 +20,7 @@ struct NavCommand {
 };
 
 struct StepCommand {
+    uint8_t packet_id;
     int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
     int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
 
