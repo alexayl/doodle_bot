@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import re
 from typing import List, Tuple, Optional
 
@@ -54,11 +55,11 @@ def load_gcode_file(path: str) -> List[Tuple]:
             if dx is None and len(nums) >= 1: dx = float(nums[0])
             if dy is None and len(nums) >= 2: dy = float(nums[1])
 
-        dx = float(dx) if dx is not None else 0.0
-        dy = float(dy) if dy is not None else 0.0
+        dx = int(round(float(dx))) if dx is not None else 0
+        dy = int(round(float(dy))) if dy is not None else 0
 
         if inc_mode:
-            if dx != 0.0 or dy != 0.0:
+            if dx != 0 or dy != 0:
                 ops.append(("move", dx, dy))
 
     return ops
@@ -91,10 +92,8 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
     - Pass through existing M280 lines
     - Strip comments/blank lines
     """
+    # First pass: gather lines and detect source modality hints
     out_lines: List[str] = []
-    saw_g91 = False
-    in_relative_mode = False  # Track whether we're in relative mode
-    
     for raw in gcode_text.splitlines():
         line = raw.split(";")[0].strip()
         if not line:
@@ -109,15 +108,14 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             out_lines.append("M280 P0 S90")
             continue
 
-        # Track mode changes
+        # drop absolute mode
         if u.startswith("G90"):
-            in_relative_mode = False
+            # out_lines.append("G90")
             continue
 
+        # keep relative mode
         if u.startswith("G91"):
-            in_relative_mode = True
-            saw_g91 = True
-            # Don't append here - we'll add it at the very beginning
+            out_lines.append("G91")
             continue
 
         # pass pen servo through (always keep these)
@@ -142,11 +140,6 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             continue
 
         # ignore everything else
-    
-    # Prepend G91 at the very start before any other commands (including servo commands)
-    if out_lines:
-        out_lines.insert(0, "G91")
-    
     return ("\n".join(out_lines) + "\n") if out_lines else ""
 
 
@@ -212,10 +205,10 @@ def scale_gcode_to_board(
             if x_match or y_match:
                 parts: List[str] = [cmd]
                 if x_match:
-                    x_val = float(x_match.group(1)) * scale_x + offset_x
+                    x_val = float(x_match.group(1)) * scale_x
                     parts.append(f"X{x_val:.3f}")
                 if y_match:
-                    y_val = float(y_match.group(1)) * scale_y + offset_y
+                    y_val = float(y_match.group(1)) * scale_y
                     parts.append(f"Y{y_val:.3f}")
                 lines.append(" ".join(parts))
             else:
