@@ -11,99 +11,81 @@
  * 
  * Each value corresponds to a state handler function in the state machine. They are specified here for debugging purposes.
  */
-enum class State : uint8_t {
-    Init,
+enum class State {
+    Init = 0,
+    Actuate,
     Idle,
-    Draw,
-    Erase,
-    Pause,
     Error
 };
 
 /**
  * @brief External events the state machine can process.
  */
-enum class Event : uint8_t {
-    CmdDraw,
-    CmdErase,
-    CmdPause,
-    CmdResume,
-    Fault,
-    Reset,
-    Done,
-    Ready
+enum class Event {
+    HardwareReset = 0,
+    InitSuccess,
+    ReceiveVldCmd,
+    ReceiveInvldCmd,
+    EmptyCmdQueue,
+    BadActuation,
+    InitError
 };
 
 /**
  * @brief Commands (outputs) produced by the state machine.
  */
-enum class Command : uint8_t {
-    None,
-    StartDraw,
-    StartErase,
-    DeviceSleep,
-    HaltMotion,
-    ResumeMotion
+enum class Command {
+    None = 0,      ///< No command to execute
+    Initialize,    ///< Initialize hardware/system
+    ProcessCommand,///< Process received command
+    HandleError,   ///< Handle error condition
+    Sleep          ///< Put device to sleep/idle
 };
 
 /**
  * @brief DoodleBot's high-level FSM.
  * 
+ * Simple state machine with enum-based states for easy command dispatching.
  * Inputs: Events
  * Outputs: Commands
  */
 class DoodleBotState {
     public:
         /**
-         * @brief Type alias for a pointer to a state handler function.
-         */
-        using StateHandler = void (DoodleBotState::*)(Event);
-
-        /**
-         * @brief Construct new DoodleBotState in IDLE.
+         * @brief Construct new DoodleBotState in Init state.
          */
         DoodleBotState();
 
         /**
-         * @brief Process a new event.
+         * @brief Process a new event and transition states.
          * 
          * @param e Event to process.
+         * @return Command to be executed by caller.
          */
-        void disbatch(Event e);
+        Command processEvent(Event e);
 
         /**
-         * @brief Fetch last issued command.
-         * 
-         * @return Command to be executed by caller (could be none).
-         */
-        Command lastCommand() const;
-
-        /**
-         * @brief fetch current state.
-         * 
-         * For logging and debugging.
+         * @brief Get current state.
          * 
          * @return State current state.
          */
-        State currentStateEnum() const;
-
-
-    private:
-        StateHandler currentState;  ///< Pointer to current state's member function
-        State currentEnum;          ///< Current state's enum value
-        Command pendingCommand;     ///< Most recent command sent
+        State getCurrentState() const;
 
         /**
-         * @brief set data members to the next state's values based on state handler.
+         * @brief Check if state machine is in error state.
+         * 
+         * @return true if in error state, false otherwise.
          */
-        void transition(StateHandler next, Command cmd, State s);
+        bool isInError() const;
 
-        // --- state handlers ---
-        void stateInit(Event e);
-        void stateIdle(Event e);
-        void stateDraw(Event e);
-        void stateErase(Event e);
-        void statePause(Event e);
-        void stateError(Event e);
-
+    private:
+        State currentState;         ///< Current state
+        
+        /**
+         * @brief Transition to new state and return associated command.
+         * 
+         * @param newState State to transition to.
+         * @return Command associated with the new state.
+         */
+        Command transitionTo(State newState);
 };

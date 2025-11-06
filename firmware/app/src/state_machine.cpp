@@ -1,47 +1,73 @@
 #include "state_machine.h"
-#include <stdio.h>
 
+DoodleBotState::DoodleBotState() : currentState(State::Init) {}
 
-DoodleBotState::DoodleBotState() :
-    currentState(&DoodleBotState::stateIdle),
-    currentEnum(State::Idle),
-    pendingCommand(Command::DeviceSleep) {}
+Command DoodleBotState::processEvent(Event e) {
+    switch (currentState) {
+        case State::Init:
+            switch (e) {
+                case Event::InitSuccess:
+                    return transitionTo(State::Idle);
+                case Event::InitError:
+                    return transitionTo(State::Error);
+                default:
+                    return Command::None;
+            }
 
+        case State::Idle:
+            switch (e) {
+                case Event::ReceiveVldCmd:
+                    return transitionTo(State::Actuate);
+                case Event::ReceiveInvldCmd:
+                    return transitionTo(State::Error);
+                default:
+                    return Command::None;
+            }
 
-void DoodleBotState::disbatch(Event e) {
-    return (this->*currentState)(e);
-}
+        case State::Actuate:
+            switch (e) {
+                case Event::EmptyCmdQueue:
+                    return transitionTo(State::Idle);
+                case Event::BadActuation:
+                    return transitionTo(State::Error);
+                default:
+                    return Command::None;
+            }
 
-
-Command DoodleBotState::lastCommand() const {
-    return pendingCommand;
-}
-
-
-State DoodleBotState::currentStateEnum() const {
-    return currentEnum;
-}
-
-
-void DoodleBotState::transition(StateHandler next, Command cmd, State s) {
-    currentState = next;
-    currentEnum = s;
-    pendingCommand = cmd;
-}
-
-// --------------------------
-// state function definitions
-// --------------------------
-
-void DoodleBotState::stateIdle(Event e) {
-    if (e == Event::CmdErase) {
-        transition(&DoodleBotState::stateErase, Command::StartErase, State::Erase);
+        case State::Error:
+            switch (e) {
+                case Event::HardwareReset:
+                    return transitionTo(State::Init);
+                default:
+                    return Command::None;
+            }
     }
+    
+    return Command::None;
 }
 
+State DoodleBotState::getCurrentState() const {
+    return currentState;
+}
 
-void DoodleBotState::stateErase(Event e) {
-    if (e == Event::Done) {
-        transition(&DoodleBotState::stateIdle, Command::DeviceSleep, State::Idle);        
+bool DoodleBotState::isInError() const {
+    return currentState == State::Error;
+}
+
+Command DoodleBotState::transitionTo(State newState) {
+    currentState = newState;
+    
+    // Return the command associated with entering this state
+    switch (newState) {
+        case State::Init:
+            return Command::Initialize;
+        case State::Idle:
+            return Command::Sleep;
+        case State::Actuate:
+            return Command::ProcessCommand;
+        case State::Error:
+            return Command::HandleError;
     }
+    
+    return Command::None;
 }

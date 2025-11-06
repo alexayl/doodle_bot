@@ -18,7 +18,6 @@ K_MSGQ_DEFINE(nav_cmd_msgq, sizeof(NavCommand), MESSAGES_PER_QUEUE, alignof(NavC
 K_MSGQ_DEFINE(step_cmd_msgq, sizeof(StepCommand), MESSAGES_PER_QUEUE, alignof(StepCommand));
 
 
-
 /* THREAD DEFINITION AND MANAGEMENT */
 
 #define STACK_SIZE      1024*8
@@ -38,32 +37,31 @@ static struct k_thread state_thread_data;
     
 /* HARDWARE INITIALIZATION */
 
-static int hardware_init() {
-   
+static void hardware_init_work_handler(struct k_work *work) {
+    printk("Starting hardware initialization...\n");
+    
     // TODO: init hardware peripherals as they are added
-        int ret = stepper_init();
+    int ret = stepper_init();
+    
     if (ret < 0) {
         printk("ERROR: Stepper initialization failed: %d\n", ret);
-        return ret;
+        printk("FATAL: Hardware initialization failed, system halted\n");
+        k_panic();
     }
 
-    printk("Hardware initialized successfully\n");
+    printk("Hardware initialization completed successfully\n");
     
-    return 0;
+    // Post success event back to state machine
+    post_state_event(Event::InitSuccess);
 }
+
+// Hardware initialization work item
+K_WORK_DEFINE(hardware_init_work, hardware_init_work_handler);
 
 /* MAIN FUNCTION */
 
 int main(void) {
-
-    int ret = hardware_init();
-    if (ret < 0)
-    {
-        printk("ERROR: Hardware initialization failed\n");
-    }
     
-    
-    /* Start threads */
     k_thread_create(&comms_thread_data, comms_stack, STACK_SIZE,
                     comms_thread, &gcode_cmd_msgq, NULL, NULL,
                     COMMS_PRIORITY, 0, K_NO_WAIT);
@@ -76,5 +74,8 @@ int main(void) {
                     state_thread, NULL, NULL, NULL,
                     STATE_PRIORITY, 0, K_NO_WAIT);
 
+    
+    post_state_event(Event::HardwareReset);
+    
     return EXIT_SUCCESS;
 }

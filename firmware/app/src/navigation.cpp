@@ -232,6 +232,8 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
         char code = current_instruction.code;
         int num = current_instruction.number;
 
+        
+
         // command router
         if(code == 'G' && num == 1) {
             #ifdef DEBUG_NAV
