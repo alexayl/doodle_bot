@@ -8,36 +8,21 @@ digraph DoodlebotStateMachine {
   // States
   Init;
   Idle;
-  Draw;
-  Erase;
-  Pause;
+  Actuate;
   Error;
 
   // Start
   Start -> Init;
-  Init -> Idle [label="ready"];
+  Init -> Idle      [label="InitSuccess"];
+  Init -> Error     [label="InitError"];
 
   // Normal flow
-  Idle -> Draw   [label="cmd_draw"];
-  Idle -> Erase  [label="cmd_erase"];
+  Idle -> Actuate   [label="ReceiveVldCmd"];
+  Idle -> Error     [label="ReceiveInvldCmd"];
 
-  Draw -> Idle   [label="done"];
-  Erase -> Idle  [label="done"];
+  Actuate -> Idle   [label="EmptyCmdQueue"];
+  Actuate -> Error  [label="BadActuation"];
 
-  // Draw -> Erase  [label="cmd_erase"];
-  // Erase -> Draw  [label="cmd_draw"];
+  Error -> Init     [label="HardwareReset"];
 
-  // Pause/resume
-  Draw -> Pause  [label="pause"];
-  Erase -> Pause [label="pause"];
-  Pause -> Draw  [label="resume"];
-  Pause -> Erase [label="resume"];
-
-  // Fault handling
-  Idle -> Error  [label="fault"];
-  Draw -> Error  [label="fault"];
-  Erase -> Error [label="fault"];
-  Pause -> Error [label="fault"];
-
-  Error -> Idle  [label="reset"];
 }

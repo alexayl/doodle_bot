@@ -2,7 +2,8 @@
 #include "stepper.h"
 #include "servo.h"
 #include "simple_led.h"
-#include "buzzer.h"
+#include "pwm_buzzer.h"
+
 
 class Peripheral {
 public:
@@ -62,23 +63,23 @@ private:
 class Buzzer: public Peripheral {
 public:
     void initialize() override { 
-        buzzer_init(); 
+    pwm_buzzer_init();
     }
     
     void buzzOn() { 
-        buzzer_on(); 
+        pwm_buzzer_on(); 
     }
     
     void buzzOff() { 
-        buzzer_off(); 
+        pwm_buzzer_off(); 
     }
     
     void toggle() {
-        buzzer_toggle();
+        pwm_buzzer_toggle();
     }
     
     bool isReady() {
-        return buzzer_is_ready();
+        return pwm_buzzer_is_ready();
     }
 
 private:
