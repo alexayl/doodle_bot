@@ -13,9 +13,7 @@ import asyncio
 import os
 import time
 import threading
-from typing import Optional, Iterable, List, Tuple, Callable, Sequence
-import threading
-from collections import deque
+from typing import Optional, Iterable
 
 from bleak import BleakClient, BleakScanner
 
@@ -56,14 +54,10 @@ class BTLink:
         # Timeouts
         self.timeout: float = DEFAULT_TIMEOUT_S
 
-    # Background loop
+        # Background loop
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._ready_evt: Optional[threading.Event] = None
-
-    # Notification log (pid, message, timestamp)
-        self._notif_log: deque[Tuple[Optional[int], str, float]] = deque(maxlen=512)
-        self._notif_lock = threading.Lock()
 
     # ---------------- Core helpers ----------------
 
@@ -204,31 +198,7 @@ class BTLink:
         # Small delay to let CCCD settle on some stacks
         await asyncio.sleep(0.4)
 
-        # Determine write properties for RX characteristic
-        # Force write-without-response since write-with-response consistently fails after first packet
-        self._use_write_with_response = False
-        try:
-            svcs = await self.client.get_services()
-            ch = svcs.get_characteristic(RX_CHAR_UUID)
-            props = set(getattr(ch, "properties", []) or []) if ch else set()
-            can_write = ("write" in props)
-            can_wo = ("write-without-response" in props) or ("write-without" in props)
-            
-            # Always prefer write-without-response for Nordic UART - write-with-response fails intermittently
-            if can_wo:
-                self._use_write_with_response = False
-                print(f"BLE connected. RX props={list(props)} - Using write-without-response for reliability")
-            elif can_write:
-                self._use_write_with_response = True
-                print(f"BLE connected. RX props={list(props)} - Using write-with-response (write-without not available)")
-            else:
-                print(f"BLE connected. RX props={list(props)} - No write properties found, defaulting to write-without-response")
-        except Exception as e:
-            print(f"BLE connected and notifications started. (write props unknown: {e}; using write-without-response)")
-        
-        # Give BLE stack extra time to stabilize after connection
-        print("Waiting 2s for BLE connection to stabilize...")
-        await asyncio.sleep(2.0)
+        print("BLE connected and notifications started.")
 
     async def _async_close(self):
         if self.client and self.client.is_connected:
@@ -271,14 +241,8 @@ class BTLink:
                     print(f"RECEIVE::ACK pid:{self.last_received_packet_id} msg:{self.last_received_message} pending:{self.instructions_in_flight}")
         
         self.response_received = True
-        # record notification
-        try:
-            with self._notif_lock:
-                self._notif_log.append((self.last_received_packet_id, (self.last_received_message or "").strip().lower(), time.time()))
-        except Exception:
-            pass
 
-    async def _async_send_packet(self, payload: bytes) -> int:
+    async def _async_send_packet(self, payload: bytes):
         """
         Send packet and increment in-flight counter immediately.
         No longer waits for ACK (fire-and-forget).
@@ -289,42 +253,22 @@ class BTLink:
 
         packet_id = self._next_pid()
         packet = bytes([packet_id]) + payload
-        expected = "ok"
 
         try:
             if not self.client.is_connected:
                 raise RuntimeError("BLE connection lost")
 
-                await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
-                t0 = time.time()
-                self.response_received = False
-                print(f"SEND::SUCCESS pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()}")
+            # Increment in-flight BEFORE sending to enforce window strictly
+            self.instructions_in_flight += 1
 
-                # Wait for notify
-                while not self.response_received and (time.time() - t0) < self.timeout:
-                    await asyncio.sleep(0.01)
+            await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
+            print(f"SEND::QUEUED pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()} pending:{self.instructions_in_flight}")
 
-                msg = (self.last_received_message or "").strip().lower()
-                pid = self.last_received_packet_id
-
-                # Exact match → success
-                if pid == packet_id and msg == expected:
-                    print(f"RECEIVE::SUCCESS pid:{packet_id} msg:'{self.last_received_message}'")
-                    return
-
-                # Resync if device says ok but pid differs (eg. after MCU reboot)
-                if msg == expected and pid is not None and pid != packet_id:
-                    print(f"RECEIVE::RESYNC host_pid:{packet_id} device_pid:{pid} msg:'{self.last_received_message}'")
-                    # Snap our counter to the device's PID so next _next_pid() follows device
-                    self.packet_id_counter = pid % 256
-                    return
-
-                # Otherwise retry
-                print(f"RECEIVE::FAIL pid:{packet_id} nack:'{self.last_received_message}' (expected '{expected}')")
-                await asyncio.sleep(RETRY_SLEEP_S)
-
-            except Exception as e:
-                print(f"BLE Error sending packet {packet_id}: {e}")
-                if "not supported" in str(e).lower() or "connection" in str(e).lower():
-                    raise
-                await asyncio.sleep(ERROR_COOLDOWN_S)
+        except Exception as e:
+            print(f"BLE Error sending packet {packet_id}: {e}")
+            # Roll back in-flight counter on send failure
+            if self.instructions_in_flight > 0:
+                self.instructions_in_flight -= 1
+            if "not supported" in str(e).lower() or "connection" in str(e).lower():
+                raise
+            await asyncio.sleep(ERROR_COOLDOWN_S)
