@@ -54,11 +54,11 @@ def load_gcode_file(path: str) -> List[Tuple]:
             if dx is None and len(nums) >= 1: dx = float(nums[0])
             if dy is None and len(nums) >= 2: dy = float(nums[1])
 
-        dx = float(dx) if dx is not None else 0.0
-        dy = float(dy) if dy is not None else 0.0
+        dx = int(round(float(dx))) if dx is not None else 0
+        dy = int(round(float(dy))) if dy is not None else 0
 
         if inc_mode:
-            if dx != 0.0 or dy != 0.0:
+            if dx != 0 or dy != 0:
                 ops.append(("move", dx, dy))
 
     return ops
@@ -148,15 +148,15 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
                 parts: List[str] = [cmd]
                 if mx:
                     x_val = float(mx.group(1))
-                    dx = x_val - (last_x if last_x is not None else 0.0)
-                    if abs(dx) >= 1e-3:
-                        parts.append(f"X{dx:.3f}")
+                    dx = int(round(x_val - (last_x if last_x is not None else 0.0)))
+                    if abs(dx) >= 1:
+                        parts.append(f"X{dx}")
                     last_x = x_val
                 if my:
                     y_val = float(my.group(1))
-                    dy = y_val - (last_y if last_y is not None else 0.0)
-                    if abs(dy) >= 1e-3:
-                        parts.append(f"Y{dy:.3f}")
+                    dy = int(round(y_val - (last_y if last_y is not None else 0.0)))
+                    if abs(dy) >= 1:
+                        parts.append(f"Y{dy}")
                     last_y = y_val
 
                 rel_lines.append(" ".join(parts))
@@ -184,8 +184,8 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
                 if u.startswith(("G0", "G1")):
                     mx = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
                     my = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
-                    dx = float(mx.group(1)) if mx else 0.0
-                    dy = float(my.group(1)) if my else 0.0
+                    dx = int(round(float(mx.group(1)))) if mx else 0
+                    dy = int(round(float(my.group(1)))) if my else 0
 
                     # steps based on max axis distance
                     import math
@@ -193,30 +193,30 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
                     if dist <= max_seg or dist == 0:
                         # emit only non-zero axes to reduce parser edge cases
                         parts = ["G1"]
-                        if abs(dx) >= 1e-3:
-                            parts.append(f"X{dx:.3f}")
-                        if abs(dy) >= 1e-3:
-                            parts.append(f"Y{dy:.3f}")
+                        if abs(dx) >= 1:
+                            parts.append(f"X{dx}")
+                        if abs(dy) >= 1:
+                            parts.append(f"Y{dy}")
                         segmented.append(" ".join(parts))
                     else:
                         steps = max(1, int(math.ceil(dist / max_seg)))
-                        step_dx = dx / steps
-                        step_dy = dy / steps
+                        step_dx = int(round(dx / steps))
+                        step_dy = int(round(dy / steps))
                         # Emit steps-1 uniform, and adjust the last to hit exact target
                         for i in range(steps - 1):
                             parts = ["G1"]
-                            if abs(step_dx) >= 1e-3:
-                                parts.append(f"X{step_dx:.3f}")
-                            if abs(step_dy) >= 1e-3:
-                                parts.append(f"Y{step_dy:.3f}")
+                            if abs(step_dx) >= 1:
+                                parts.append(f"X{step_dx}")
+                            if abs(step_dy) >= 1:
+                                parts.append(f"Y{step_dy}")
                             segmented.append(" ".join(parts))
                         last_dx = dx - step_dx * (steps - 1)
                         last_dy = dy - step_dy * (steps - 1)
                         parts = ["G1"]
-                        if abs(last_dx) >= 1e-3:
-                            parts.append(f"X{last_dx:.3f}")
-                        if abs(last_dy) >= 1e-3:
-                            parts.append(f"Y{last_dy:.3f}")
+                        if abs(last_dx) >= 1:
+                            parts.append(f"X{last_dx}")
+                        if abs(last_dy) >= 1:
+                            parts.append(f"Y{last_dy}")
                         segmented.append(" ".join(parts))
                 else:
                     segmented.append(line)
@@ -275,11 +275,11 @@ def scale_gcode_to_board(
             if x_match or y_match:
                 parts: List[str] = [cmd]
                 if x_match:
-                    x_val = float(x_match.group(1)) * scale_x
-                    parts.append(f"X{x_val:.3f}")
+                    x_val = int(round(float(x_match.group(1)) * scale_x))
+                    parts.append(f"X{x_val}")
                 if y_match:
-                    y_val = float(y_match.group(1)) * scale_y
-                    parts.append(f"Y{y_val:.3f}")
+                    y_val = int(round(float(y_match.group(1)) * scale_y))
+                    parts.append(f"Y{y_val}")
                 lines.append(" ".join(parts))
             else:
                 lines.append(f"{cmd}")
