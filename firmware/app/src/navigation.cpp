@@ -2,6 +2,7 @@
 #include <math.h>
 #include "navigation.h"
 #include "instruction_parser.h"
+#include "comms_thread.h"
 
 /* STATIC MEMBERS */
 InstructionParser::GCodeCmd InstructionHandler::current_instruction_;
@@ -12,6 +13,10 @@ k_msgq* MotionPlanner::step_queue_ = nullptr;
 
 Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
 Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
+
+// Track which packet IDs have been acknowledged
+static uint8_t last_acked_packet_id = 255;  // Initialize to invalid packet ID
+static uint8_t current_packet_id = 0;       // Track the currently processing packet ID
 
 // Work queue for motor control (to avoid ISR context issues)
 static void motor_control_work_handler(struct k_work *work);
@@ -93,6 +98,7 @@ int MotionPlanner::discretize() {
     
     // If velocity larger than max velocity, split into multiple commands
     do {
+        step_command.packet_id = current_instruction_.packet_id;
         if (fabs(left_vel) > STEPPER_MAX_VELOCITY) {
             if (left_vel > 0) {
                 left_vel -= STEPPER_MAX_VELOCITY;
@@ -129,6 +135,7 @@ int MotionPlanner::discretize() {
 int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current_instruction) {
     int ret;
     current_instruction_ = current_instruction;
+    current_packet_id = current_instruction.packet_id;  // Track the packet ID being processed
 
     // turn gcode into motion commands
     ret = interpolate();
@@ -146,7 +153,6 @@ int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current
             printk("ERROR: Discretization not successful.\n");
         }
     }
-
 
     // wheel velocities are consumed by motor_control_handler()
     // start the timer that runs it if it is not currently running
@@ -176,6 +182,23 @@ static void motor_control_work_handler(struct k_work *work) {
         MotionPlanner::stepper_left_.stop();
         MotionPlanner::stepper_right_.stop();
         k_timer_stop(&motor_control_timer);
+        
+        // Send final ACK if we haven't already for the last instruction
+        // This handles the case where the last step command completes
+        if (g_bleService && (current_packet_id != last_acked_packet_id)) {
+            last_acked_packet_id = current_packet_id;
+            char ack[sizeof("aok\n")] = "aok\n";
+            ack[0] = current_packet_id;
+            #ifdef DEBUG_NAV
+            printk("MOTOR_CTRL: Sending FINAL ACK for packet ID %d\n", current_packet_id);
+            #endif
+            g_bleService->send(ack, sizeof(ack));
+        } else if (g_bleService) {
+            #ifdef DEBUG_NAV
+            printk("MOTOR_CTRL: Skipping duplicate FINAL ACK for packet ID %d (last_acked=%d)\n", 
+                   current_packet_id, last_acked_packet_id);
+            #endif
+        }
         return;
     }
 
@@ -187,6 +210,22 @@ static void motor_control_work_handler(struct k_work *work) {
 
     MotionPlanner::stepper_left_.setVelocity(step_command.left_velocity);
     MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
+
+    // Send ACK with packet ID as first byte, but only once per packet ID
+    if (g_bleService && (step_command.packet_id != last_acked_packet_id)) {
+        last_acked_packet_id = step_command.packet_id;
+        char ack[sizeof("aok\n")] = "aok\n";
+        ack[0] = step_command.packet_id;
+        #ifdef DEBUG_NAV
+        printk("MOTOR_CTRL: Sending ACK for packet ID %d\n", step_command.packet_id);
+        #endif
+        g_bleService->send(ack, sizeof(ack));
+    } else if (g_bleService) {
+        #ifdef DEBUG_NAV
+        printk("MOTOR_CTRL: Skipping duplicate ACK for packet ID %d (last_acked=%d)\n", 
+               step_command.packet_id, last_acked_packet_id);
+        #endif
+    }
 }
 void MotionPlanner::reset_state() {
     theta_current = 0.0f;
@@ -200,6 +239,17 @@ void MotionPlanner::reset_state() {
 
 int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
 
+    // consume servo instruction
+    
+    // send ack command back
+    if (g_bleService) {
+        char ack[sizeof("aok\n")] = "aok\n";
+        ack[0] = gCodeCmd.packet_id;
+        #ifdef DEBUG_NAV
+        printk("SERVO: Sending ACK for packet ID %d\n", gCodeCmd.packet_id);
+        #endif
+        g_bleService->send(ack, sizeof(ack));
+    }
     
     return 0;
 }

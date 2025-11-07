@@ -8,11 +8,12 @@
 #include <stdio.h>
 #include <string.h>
 
+// Global BLE service pointer
+BleService* g_bleService = nullptr;
+
 //------------------
 // THREAD
 // -----------------
-
-static BleService* g_bleService = nullptr;
 
 /* THREAD FUNCTIONS */
 
@@ -55,13 +56,6 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
     // Queue parsed instruction for navigation
     if (k_msgq_put(q, &cmd, K_NO_WAIT) != 0) {
         printk("Queue full, dropping message\n");
-    }
-
-    // Send ACK with packet ID as first byte
-    if (g_bleService) {
-        char ack[sizeof("aok\n")] = "aok\n";
-        ack[0] = expected_packet_id;
-        g_bleService->send(ack, sizeof(ack));
     }
 
 }

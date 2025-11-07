@@ -15,6 +15,7 @@ int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
     // find and validate packet id
     uint8_t packet_id = (uint8_t)*ptr;
     if (packet_id == expected_packet_id) {
+        outCmd.packet_id = packet_id;
         expected_packet_id++; // increment if successful
     } else {
         printk("Packet ID mismatch: expected %d, got %d\n", expected_packet_id, packet_id);
