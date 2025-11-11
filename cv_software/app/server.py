@@ -3,12 +3,7 @@ from __future__ import annotations
 import os, sys, time, math, threading, shutil
 from pathlib import Path
 from contextlib import contextmanager
-from typing import List, Tuple, Optional
-
-# Load environment variables from .env file
-from dotenv import load_dotenv
-load_dotenv()
-
+from typing import List, Optional
 import cv2
 import numpy as np
 from flask import Flask, Response, request, render_template, redirect, url_for
@@ -21,7 +16,8 @@ from app.camera import ThreadedCamera, CameraConfig
 from app.path_parse import load_gcode_file, convert_pathfinding_gcode
 from app.bt_link import BTLink
 from app.utils import encode_jpeg, Metrics
-
+from dotenv import load_dotenv
+load_dotenv()
 # -----------------------------------------------------------------------------#
 # Config
 # -----------------------------------------------------------------------------#
@@ -34,6 +30,15 @@ PATHFINDING_DIR = os.getenv(
 STREAM_JPEG_QUALITY = 75
 _K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
 _MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
+_WAYPOINT_TOLERANCE_MM = float(os.getenv("WAYPOINT_TOLERANCE_MM", "2.0"))
+_DEVIATION_SMOOTHING = float(os.getenv("DEVIATION_SMOOTHING", "0.3"))  # 0-1, lower = more smoothing
+_WAYPOINT_DEBOUNCE_FRAMES = int(os.getenv("WAYPOINT_DEBOUNCE_FRAMES", "3"))  # Frames to confirm waypoint
+
+# CV correction injection tuning
+_CORR_ENABLE = os.getenv("CORR_ENABLE", "1").strip() not in {"0", "false", "False"}
+_CORR_INJECT_MAX_MM = float(os.getenv("CORR_INJECT_MAX_MM", "1.0"))
+_CORR_INJECT_MIN_MM = float(os.getenv("CORR_INJECT_MIN_MM", "0.3"))
+_CORR_FEED_MM_PER_MIN = int(os.getenv("CORR_FEED_MM_PER_MIN", "2000"))
 
 # Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
 PATH_CANVAS_SIZE = (
@@ -65,6 +70,8 @@ def get_cam() -> Optional[ThreadedCamera]:
 # -----------------------------------------------------------------------------#
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
+# Set waypoint tolerance from environment (currently unused with waypoint logic disabled)
+RUN.follower.p.pos_eps_mm = _WAYPOINT_TOLERANCE_MM
 bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
 @contextmanager
 def _in_dir(path: str):
@@ -181,6 +188,77 @@ def _read_gcode_text(path_or_name: str) -> str:
     with open(p, "r", encoding="utf-8") as f:
         return f.read()
 
+def _parse_xy_from_gcode_line(line: Optional[str]) -> Optional[tuple[float, float]]:
+    """Return (dx, dy) from a G0/G1 line; assumes values are in board mm (relative by our pipeline)."""
+    if not line:
+        return None
+    s = line.strip().upper()
+    if not (s.startswith("G1") or s.startswith("G0")):
+        return None
+    dx = dy = 0.0
+    has_x = has_y = False
+    tok = s.replace("\t", " ").split()
+    for t in tok[1:]:
+        if t.startswith("X"):
+            try:
+                dx = float(t[1:])
+                has_x = True
+            except Exception:
+                pass
+        elif t.startswith("Y"):
+            try:
+                dy = float(t[1:])
+                has_y = True
+            except Exception:
+                pass
+    if has_x or has_y:
+        return (dx if has_x else 0.0, dy if has_y else 0.0)
+    return None
+
+def _make_correction_callback():
+    """Create a callback for BT windowed sending that injects small CV-based corrections."""
+    if not _CORR_ENABLE:
+        return None
+
+    def _cb(head_pid: int, head_line: str, next_line: Optional[str]):
+        # Need a next move to define an immediate target
+        try:
+            pose = cvp.get_pose_mm()
+        except Exception:
+            pose = None
+        if not pose:
+            return []
+        rel = _parse_xy_from_gcode_line(next_line)
+        if rel is None:
+            return []
+
+        (x, y), heading, conf = pose
+        target = (x + rel[0], y + rel[1])
+        corr = cvp.get_path_correction(target, max_correction_mm=_MAX_CORR_MM)
+        if not corr:
+            return []
+
+        dx_corr, dy_corr = corr
+        mag = math.hypot(dx_corr, dy_corr)
+        if mag < _CORR_INJECT_MIN_MM:
+            return []
+        if mag > _CORR_INJECT_MAX_MM:
+            scale = _CORR_INJECT_MAX_MM / mag
+            dx_corr *= scale
+            dy_corr *= scale
+        return [
+            f"G1 X{dx_corr:.2f} Y{dy_corr:.2f} F{_CORR_FEED_MM_PER_MIN}",
+        ]
+
+    return _cb
+
+# Waypoint/learning system is currently disabled. Keeping helpers commented for future use.
+# def _apply_learned_corrections(waypoints: List[Waypoint], path_name: str) -> List[Waypoint]:
+#     waypoint_tuples = [(wp.x_mm, wp.y_mm) for wp in waypoints]
+#     corrected_tuples = PathCorrectionApplier.apply_corrections(
+#         waypoint_tuples, path_name, max_correction_mm=_MAX_CORR_MM)
+#     return [Waypoint(x_mm=x, y_mm=y) for x, y in corrected_tuples]
+
 # -----------------------------------------------------------------------------#
 # CV worker (kept for metrics/overlay). Optional legacy move streaming gated.
 # -----------------------------------------------------------------------------#
@@ -209,15 +287,8 @@ def _cv_worker():
         pass
 
     cam = get_cam()
-    # Legacy move streaming is removed; BLE now only receives full G-code packets.
 
     while True:
-        # if not bt.client or not bt.client.is_connected:
-        # try:
-        #     bt.connect()
-        # except Exception:
-        #     time.sleep(1.0)
-        #     continue
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
@@ -230,6 +301,9 @@ def _cv_worker():
 
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
+
+        # Waypoint-based tracking temporarily disabled
+        # Kept for overlay metrics only
 
         time.sleep(0.004)
 
@@ -255,6 +329,15 @@ def overlay_fn():
             line1 += " | CALIBRATING..."
         run_txt = f"Run: {'ON' if RUN.active else 'OFF'} {RUN.follower.index()}/{RUN.follower.total()}"
         line2 = f"Rate: {MET.rate_hz():.1f} Hz | Median cam→pose: {MET.median_latency_ms():.0f} ms | Uptime: {MET.uptime_pct:.1f}% | {run_txt}"
+        
+        # Add path correction stats if available
+        path_stats = cvp.get_path_stats()
+        if path_stats and RUN.active:
+            mean_dev = path_stats.get("mean_deviation_mm", 0)
+            max_dev = path_stats.get("max_deviation_mm", 0)
+            line3 = f"Path: Mean dev: {mean_dev:.1f}mm | Max dev: {max_dev:.1f}mm"
+            cv2.putText(frame, line3, (16, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2, cv2.LINE_AA)
+        
         cv2.putText(frame, line1, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.putText(frame, line2, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
         return frame
@@ -292,34 +375,6 @@ def _no_buffer(resp):
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
-# def sanitize_for_firmware(gcode_text: str, force_relative: bool = True) -> str:
-#     """
-#     Keep only: G91, G0/G1, M280. Strip G90/G21/others.
-#     If force_relative and no G91 present, prepend one.
-#     """
-#     out = []
-#     saw_g91 = False
-#     for raw in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-#         line = raw.split(";")[0].strip()
-#         if not line:
-#             continue
-#         u = line.upper()
-
-#         if u.startswith("G21") or u.startswith("G90"):
-#             out.append("G90")
-#             continue
-#         if u.startswith("G91"):
-#             saw_g91 = True
-#             out.append("G91")
-#             continue
-#         if u.startswith(("G0", "G1")) or u.startswith("M280"):
-#             out.append(line)
-#             continue
-#         # drop others
-
-#     if force_relative and not saw_g91:
-#         out.insert(0, "G91")
-#     return "\n".join(out) + "\n"
 # -----------------------------------------------------------------------------#
 # Routes
 # -----------------------------------------------------------------------------#
@@ -333,7 +388,8 @@ def home():
 def erase():
     _ensure_cv_thread()
     STATE["mode"] = "erase"
-    msg = None; error = None
+    msg = None
+    error = None
 
     if request.method == "POST":
         action = request.form.get("action", "start")
@@ -341,7 +397,7 @@ def erase():
             RUN.stop()
             return redirect(url_for("erase"))
 
-        # 1) Build normalized path for local preview/control (unchanged)
+        # 1) Build normalized path for local preview/control
         raw_norm = _load_named_gcode_normalized("erase")
         if not raw_norm:
             error = "No erase path found in pathfinding directory."
@@ -351,17 +407,24 @@ def erase():
                 error = "Board not calibrated yet."
             else:
                 try:
+                    # Send G-code to robot (windowed BLE with execution ACK)
                     gcode_str = _read_gcode_text("erase")
-                    
-                    # Normalize and scale to firmware G-code using current calibration
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(firmware_gcode)
+                    gcode_lines = [l for l in firmware_gcode.split('\n') if l.strip()]
+                    bt.send_gcode_windowed(
+                        firmware_gcode,
+                        window_size=1,  # Reduced to 1 for maximum reliability with write-without-response
+                        on_head_executed=None,
+                    )
+                    print(f"✓ Sent {len(gcode_lines)} G-code commands to robot via BLE (windowed)")
+                    print(f"  Window size=1, waiting for per-line execution ACKs")
+                    print(f"{'='*60}\n")
+                    
+                    msg = f"Erase started: {len(gcode_lines)} G-code commands sent (windowed)."
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
-
-                RUN.load(_as_waypoints(fitted))
-                RUN.start()
-                msg = f"Erase queued with {len(fitted)} vertices and sent over BLE."
+                    RUN.stop()
+                    print(f"✗ Error during erase: {e}")
 
         return render_template("index.html", page="erase", msg=msg, error=error)
 
@@ -388,17 +451,26 @@ def draw():
             img_path = os.path.join("uploads", fname)
             uploaded_file.save(img_path)
             STATE["target_image"] = fname
+            print(f"DEBUG: Uploaded file: {fname}, path: {img_path}")
             try:
                 base = os.path.splitext(fname)[0]
                 gcode_path = os.path.join("uploads", f"{base}.gcode")
+                print(f"DEBUG: Will generate G-code to: {gcode_path}")
                 gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(575, 730))
+                print(f"DEBUG: Generated G-code file: {gcode_path}")
                 ops = load_gcode_file(gcode_path)
+                print(f"DEBUG: Loaded {len(ops)} ops from G-code")
                 raw_norm = _ops_to_normalized_wps(ops)
+                print(f"DEBUG: Normalized to {len(raw_norm)} waypoints")
             except Exception as e:
+                print(f"DEBUG: Image conversion exception: {e}")
+                import traceback
+                traceback.print_exc()
                 raw_norm = []
                 error = f"Image conversion failed: {e}"
 
         if not raw_norm:
+            print(f"DEBUG: raw_norm is empty, falling back to default 'draw'")
             fallback = _load_named_gcode_normalized("draw")
             if not fallback and error is None:
                 error = "No draw path found and no valid uploaded image."
@@ -411,20 +483,36 @@ def draw():
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
             else:
-                # Send raw G-code to MCU (use generated file if present, else named fallback)
                 try:
-                    src_for_gcode = gcode_path if gcode_path else "draw"
-                    gcode_str = _read_gcode_text(src_for_gcode)
+                    # Determine path name for learning
+                    path_name = "draw"
+                    if uploaded_file and uploaded_file.filename:
+                        path_name = f"draw_{Path(uploaded_file.filename).stem}"
                     
-                    # Normalize and scale to firmware G-code using current calibration
+                    # Send G-code to robot (windowed BLE with execution ACK)
+                    src_for_gcode = gcode_path if gcode_path else "draw"
+                    print(f"DEBUG: src_for_gcode = {src_for_gcode}")
+                    gcode_str = _read_gcode_text(src_for_gcode)
+                    print(f"DEBUG: Read {len(gcode_str)} chars of G-code text")
                     firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    bt.send_gcode(firmware_gcode)
+                    print(f"DEBUG: Built firmware G-code: {len(firmware_gcode)} chars")
+                    gcode_lines = [l for l in firmware_gcode.split('\n') if l.strip()]
+                    print(f"DEBUG: Split into {len(gcode_lines)} lines")
+                    bt.send_gcode_windowed(
+                        firmware_gcode,
+                        window_size=1,  # Reduced to 1 for maximum reliability with write-without-response
+                        on_head_executed=None,
+                        exec_timeout_s=30,
+                    )
+                    print(f"✓ Sent {len(gcode_lines)} G-code commands to robot via BLE (windowed)")
+                    print(f"  Window size=1, waiting for per-line execution ACKs")
+                    print(f"{'='*60}\n")
+                    
+                    msg = f"Draw started: {len(gcode_lines)} G-code commands sent (windowed)."
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
-
-                RUN.load(_as_waypoints(fitted))
-                RUN.start()
-                msg = f"Draw queued with {len(fitted)} vertices and sent over BLE."
+                    RUN.stop()
+                    print(f"✗ Error during draw: {e}")
 
         return render_template("index.html", page="draw",
                                has_target=bool(STATE["target_image"]),
@@ -442,6 +530,72 @@ def stream():
     q = max(40, min(q, 80))
     return Response(gen_frames(overlay_fn, quality=q),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
+
+@app.route("/api/path_correction")
+def api_path_correction():
+    """
+    API endpoint to get real-time path correction information.
+    Returns JSON with current deviation, correction vector, and statistics.
+    """
+    from flask import jsonify
+    
+    result = {
+        "active": RUN.active,
+        "correction": None,
+        "target": None,
+        "current_pose": None,
+        "stats": cvp.get_path_stats()
+    }
+    
+    # Get current pose
+    pose = cvp.get_pose_mm()
+    if pose:
+        (x, y), heading, conf = pose
+        result["current_pose"] = {
+            "x_mm": x,
+            "y_mm": y,
+            "heading_rad": heading,
+            "confidence": conf
+        }
+    
+    # Get correction if path is active
+    if RUN.active and RUN.follower.current_target():
+        target_wp = RUN.follower.current_target()
+        if target_wp:
+            result["target"] = {
+                "x_mm": target_wp.x_mm,
+                "y_mm": target_wp.y_mm,
+                "waypoint_index": RUN.follower.index(),
+                "total_waypoints": RUN.follower.total()
+            }
+            
+            target_mm = (target_wp.x_mm, target_wp.y_mm)
+            correction = cvp.get_path_correction(target_mm, max_correction_mm=_MAX_CORR_MM)
+            if correction:
+                dx_corr, dy_corr = correction
+                result["correction"] = {
+                    "dx_mm": dx_corr,
+                    "dy_mm": dy_corr,
+                    "magnitude_mm": math.sqrt(dx_corr**2 + dy_corr**2)
+                }
+    
+    return jsonify(result)
+
+@app.route("/api/correction_models")
+def api_correction_models():
+    """List correction models (disabled while learning is turned off)."""
+    from flask import jsonify
+    return jsonify({
+        "models": [],
+        "count": 0,
+        "status": "learning disabled"
+    })
+
+@app.route("/api/correction_model/<path_name>")
+def api_correction_model_detail(path_name: str):
+    """Model detail endpoint (disabled)."""
+    from flask import jsonify
+    return jsonify({"error": "learning disabled"}), 404
 
 def _shutdown():
     try:
