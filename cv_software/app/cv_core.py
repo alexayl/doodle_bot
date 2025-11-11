@@ -12,7 +12,6 @@ from app.path_parse import (
     load_gcode_file,
     convert_pathfinding_gcode,
     scale_gcode_to_board,
-    segment_long_moves,
 )
 _POSE_ALPHA = 0.25  #  factor for updating the pose estimate
 _SCALE_ALPHA = 0.15  #  factor for updating the scale estimate
