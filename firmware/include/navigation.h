@@ -6,19 +6,26 @@
 
 // #define DEBUG_NAV
 
-#define PI                      (3.14159265359)
-#define WHEEL_RADIUS            (10.0) // radius of the wheels on each stepper motor
-#define DOODLEBOT_RADIUS        (50.0) // distance from center of doodlebot to wheel
-#define STEPPER_CTRL_FREQ       (5.0) // occurrences / SEC
-#define STEPPER_CTRL_PERIOD     (1.0 / STEPPER_CTRL_FREQ) // seconds per occurrence
 
-#define STEPPER_MAX_VELOCITY   (150.0f) // degrees per second
+#define PI                      (3.14159265359f)
+
+#define WHEEL_RADIUS            (48.0f)    // radius of the wheels on each stepper motor
+#define DOODLEBOT_RADIUS        (165.0f)   // distance from center of doodlebot to wheel
+
+#define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
+#define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence
+
+#define MAX_LINEAR_VELOCITY     (200.0f) // maximum linear velocity (mm/s)
+
+#define DEG_TO_RAD(deg)         ((deg) * PI / 180.0f)
+#define RAD_TO_DEG(rad)         ((rad) * 180.0f / PI)
 
 struct NavCommand {
     float r;          // distance to travel
     float theta;      // angle to change
 };
 
+// signed velocity command for each stepper motor deg/s
 struct StepCommand {
     uint8_t packet_id;
     int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
@@ -34,6 +41,11 @@ struct StepCommand {
 class InstructionHandler {
 public:
     virtual int consumeInstruction(const InstructionParser::GCodeCmd &) = 0;
+    
+    // For testing purposes
+    static void set_current_instruction(const InstructionParser::GCodeCmd &cmd) {
+        current_instruction_ = cmd;
+    }
 
 protected:
     static InstructionParser::GCodeCmd current_instruction_;
@@ -69,10 +81,12 @@ public:
 private:
 
     // interpolation
-    static float theta_current;
+    static float theta_current_;
 
+public: // Made public for testing
     int interpolate();          // G-code -> (r, theta)
     int discretize();           // (r, theta) -> (vL, vR)
+private:
 };
 
 // External timer declaration
