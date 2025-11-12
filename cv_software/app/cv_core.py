@@ -7,7 +7,12 @@ import math
 import time
 from app.utils import board_to_robot
 from app.geom import fit_path_to_board as _fit_to_board
-
+import os
+from app.path_parse import (
+    load_gcode_file,
+    convert_pathfinding_gcode,
+    scale_gcode_to_board,
+)
 _POSE_ALPHA = 0.25  #  factor for updating the pose estimate
 _SCALE_ALPHA = 0.15  #  factor for updating the scale estimate
 _CONF_MIN_BOARD = 0.60  # min confidence threshold for board detection
@@ -16,12 +21,15 @@ _CONF_MIN_BOT = 0.60  # min confidence threshold for bot detection
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
 
+# Options: "4x4_50", "5x5_100", "6x6_250", "apriltag_36h11"
+MARKER_DICT = os.getenv("MARKER_DICT", "4x4_50").upper()
+
 BOT_BASELINE_MM = 60.0
 # testing on a board of this dims
-# KNOWN_BOARD_WIDTH_MM = 1150.0
-# KNOWN_BOARD_HEIGHT_MM = 1460.0
-KNOWN_BOARD_HEIGHT_MM = 250.0
-KNOWN_BOARD_WIDTH_MM = 200
+KNOWN_BOARD_WIDTH_MM = 1150.0
+KNOWN_BOARD_HEIGHT_MM = 1460.0
+# KNOWN_BOARD_HEIGHT_MM = 250.0
+# KNOWN_BOARD_WIDTH_MM = 200
 _MAX_REPROJ_ERR_PX = 0.8
 _MAX_SIZE_JUMP_FRAC = 0.12
 _MAX_CENTER_JUMP_PX = 30.0 
@@ -49,7 +57,39 @@ class BotPose:
     confidence: float = 0.0
 
 def _aruco_dict():
-    return cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    """Get ArUco/AprilTag dictionary based on MARKER_DICT setting"""
+    dict_name = MARKER_DICT.replace("X", "x")  # Normalize
+    
+    # Map common names to OpenCV constants
+    dict_map = {
+        "4x4_50": cv2.aruco.DICT_4X4_50,
+        "4x4_100": cv2.aruco.DICT_4X4_100,
+        "4x4_250": cv2.aruco.DICT_4X4_250,
+        "4x4_1000": cv2.aruco.DICT_4X4_1000,
+        "5x5_50": cv2.aruco.DICT_5X5_50,
+        "5x5_100": cv2.aruco.DICT_5X5_100,
+        "5x5_250": cv2.aruco.DICT_5X5_250,
+        "5x5_1000": cv2.aruco.DICT_5X5_1000,
+        "6x6_50": cv2.aruco.DICT_6X6_50,
+        "6x6_100": cv2.aruco.DICT_6X6_100,
+        "6x6_250": cv2.aruco.DICT_6X6_250,
+        "6x6_1000": cv2.aruco.DICT_6X6_1000,
+        "7x7_50": cv2.aruco.DICT_7X7_50,
+        "7x7_100": cv2.aruco.DICT_7X7_100,
+        "7x7_250": cv2.aruco.DICT_7X7_250,
+        "7x7_1000": cv2.aruco.DICT_7X7_1000,
+    }
+    
+    if hasattr(cv2.aruco, 'DICT_APRILTAG_36h11'):
+        dict_map.update({
+            "apriltag_36h11": cv2.aruco.DICT_APRILTAG_36h11,
+            "apriltag_36h10": cv2.aruco.DICT_APRILTAG_36h10,
+            "apriltag_25h9": cv2.aruco.DICT_APRILTAG_25h9,
+            "apriltag_16h5": cv2.aruco.DICT_APRILTAG_16h5,
+        })
+    
+    dict_type = dict_map.get(dict_name.lower(), cv2.aruco.DICT_5X5_100)
+    return cv2.aruco.getPredefinedDictionary(dict_type)
 
 def _aruco_params():
     if hasattr(cv2.aruco, "DetectorParameters"):
@@ -165,10 +205,23 @@ class BoardCalibrator:
             dtype=np.float32
         )
 
-        H = cv2.getPerspectiveTransform(img_pts, board_rect)
+        # Use findHomography with RANSAC for outlier rejection
+        H, mask = cv2.findHomography(
+            img_pts, 
+            board_rect, 
+            method=cv2.RANSAC,
+            ransacReprojThreshold=2.0  # pixels
+        )
+        
         if H is None or abs(H[2, 2]) < 1e-12:
             return self.board_pose
         H = H / H[2, 2]
+        
+        # Check inlier ratio - need at least 75% inliers for quality calibration
+        inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 1.0
+        if inlier_ratio < 0.75:
+            print(f"Low inlier ratio: {inlier_ratio:.2f}, rejecting calibration")
+            return self.board_pose
 
         reproj = self._reproj_error(H, img_pts, board_rect)
         found = sum(1 for k in ("TL", "TR", "BR", "BL") if k in cs)
@@ -293,6 +346,7 @@ class CVPipeline:
         self._bot: Optional[BotPose] = None
         self._mm_per_px_smooth: Optional[float] = None
         self._pose_smooth: Optional[BotPose] = None
+        self._path_deviation_history: List[float] = []  # Track path following accuracy
 
     @staticmethod
     def _ema(old, new, a):
@@ -317,7 +371,7 @@ class CVPipeline:
         self._bot = bot
 
         if self.cal.board_pose and self.cal.board_pose.mm_per_px is None:
-            self.scale.from_board_size()
+            self.scale.from_bot_baseline(bot)
 
         if self.cal.board_pose and self.cal.board_pose.mm_per_px is not None:
             self._mm_per_px_smooth = self._ema(self._mm_per_px_smooth, float(self.cal.board_pose.mm_per_px), _SCALE_ALPHA)
@@ -420,3 +474,99 @@ class CVPipeline:
         px = st["bot_pose"]["center_board_px"]
         mpp = float(st["mm_per_px"])
         return (px[0] * mpp, px[1] * mpp), float(st["bot_pose"]["heading_rad"]), float(st["bot_pose"]["confidence"])
+    
+    def get_path_correction(
+        self, 
+        target_board_mm: Tuple[float, float],
+        max_correction_mm: float = 5.0
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Compute real-time path correction based on current vs target position.
+        
+        Args:
+            target_board_mm: Target (x, y) position in board mm coordinates
+            max_correction_mm: Maximum correction magnitude to prevent overcorrection
+        
+        Returns:
+            (dx_correction_mm, dy_correction_mm) or None if not ready
+        """
+        pose = self.get_pose_mm()
+        if not pose:
+            return None
+        
+        (current_x, current_y), heading, conf = pose
+        target_x, target_y = target_board_mm
+        
+        # Compute error vector
+        error_x = target_x - current_x
+        error_y = target_y - current_y
+        error_mag = math.sqrt(error_x**2 + error_y**2)
+        
+        # Track deviation for diagnostics
+        self._path_deviation_history.append(error_mag)
+        if len(self._path_deviation_history) > 100:
+            self._path_deviation_history.pop(0)
+        
+        # Clamp correction to avoid overcorrection
+        if error_mag > max_correction_mm:
+            scale = max_correction_mm / error_mag
+            error_x *= scale
+            error_y *= scale
+        
+        # Apply proportional gain based on confidence
+        gain = 0.5 * conf  # Lower confidence = gentler correction
+        
+        return (error_x * gain, error_y * gain)
+    
+    def get_path_stats(self) -> Dict:
+        """Get statistics on path following performance."""
+        if not self._path_deviation_history:
+            return {}
+        
+        arr = np.asarray(self._path_deviation_history, dtype=float)
+        rms = float(np.sqrt(np.mean(arr**2))) if arr.size else 0.0
+        return {
+            "mean_deviation_mm": float(np.mean(arr)) if arr.size else 0.0,
+            "max_deviation_mm": float(np.max(arr)) if arr.size else 0.0,
+            "std_deviation_mm": float(np.std(arr)) if arr.size else 0.0,
+            "rms_deviation_mm": rms,
+        }
+    
+    def build_firmware_gcode(self, gcode_text: str, canvas_size: Tuple[float, float] = (575.0, 730.0)) -> str:
+        """
+        Convert pathfinding G-code (canvas units) into firmware-ready, relative G-code
+        using the current calibration.
+
+        - Scales G0/G1 X/Y from canvas units to detected board mm.
+        - Normalizes to firmware subset: enforce G91 and map any legacy M3/M5 to M280.
+
+        Returns the G-code string ready to transmit. Requires a valid board size.
+        """
+        bs = self.board_size_mm()
+        if not bs:
+            raise RuntimeError("Board not calibrated: board size unknown.")
+        scaled = scale_gcode_to_board(gcode_text, canvas_size, bs)
+        print(f"DEBUG build_firmware_gcode: After scaling, first 5 lines:")
+        for i, line in enumerate(scaled.split('\n')[:5]):
+            print(f"  {i}: {line}")
+        
+        normalized = convert_pathfinding_gcode(scaled)
+        print(f"DEBUG build_firmware_gcode: After normalization, first 5 lines:")
+        for i, line in enumerate(normalized.split('\n')[:5]):
+            print(f"  {i}: {line}")
+        
+        # Optionally segment long moves to avoid firmware NACKs on large deltas
+        try:
+            max_seg = float(os.getenv("GCODE_MAX_SEG_MM", "100.0"))
+        except Exception:
+            max_seg = 100.0
+        try:
+            max_axis = float(os.getenv("GCODE_MAX_AXIS_SEG_MM", "80.0"))
+        except Exception:
+            max_axis = max_seg
+        result = segment_long_moves(normalized, max_segment_mm=max_seg, max_axis_segment_mm=max_axis)
+        print(f"DEBUG build_firmware_gcode: After segmentation, first 5 lines:")
+        for i, line in enumerate(result.split('\n')[:5]):
+            print(f"  {i}: {line}")
+        
+        return result

@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 import math
+import time
+import os
 from app.utils import board_to_robot
 
 @dataclass(frozen=True)
@@ -10,11 +12,21 @@ class Waypoint:
     y_mm: float
 
 @dataclass
+class WaypointReached:
+    """Data captured when robot reaches a waypoint (for learning)."""
+    waypoint_index: int
+    target_x_mm: float
+    target_y_mm: float
+    actual_x_mm: float
+    actual_y_mm: float
+    confidence: float
+    timestamp: float
+
+@dataclass
 class FollowerParams:
     pos_eps_mm: float = 2.0
     # legacy magnitude clamp
     max_step_mm: float = 25.0
-    # NEW: anisotropic caps in ROBOT frame (forward/left)
     max_step_forward_mm: float = 25.0
     max_step_left_mm: float = 12.0   # give Y/left less if you want tighter control
 
@@ -22,20 +34,32 @@ class PathFollower:
     """
     Minimal path follower: computes a bounded step toward the next waypoint.
     Returns a (forward,left) delta in the ROBOT frame, leaving timing/motion to firmware.
+    Also tracks waypoint arrivals for learning corrections.
     """
     def __init__(self, params: Optional[FollowerParams] = None):
         self.p = params or FollowerParams()
         self._wps: List[Waypoint] = []
         self._i = 0
         self.active = False
+        self.reached_history: List[WaypointReached] = []  # Learning data
+        
+        # Smoothing/debouncing state (configurable via environment)
+        self._smooth_deviation = 0.0
+        self._deviation_alpha = float(os.getenv("DEVIATION_SMOOTHING", "0.3"))
+        self._waypoint_stable_count = 0
+        self._stable_threshold = int(os.getenv("WAYPOINT_DEBOUNCE_FRAMES", "3"))
 
     def load_waypoints(self, wps: List[Waypoint]) -> None:
         self._wps = wps or []
         self._i = 0
+        self.reached_history = []  # Reset learning data
 
     def start(self) -> None:
         self.active = bool(self._wps)
         self._i = 0
+        self.reached_history = []
+        self._smooth_deviation = 0.0
+        self._waypoint_stable_count = 0
 
     def stop(self) -> None:
         self.active = False
@@ -50,6 +74,65 @@ class PathFollower:
         if not self.active or self._i >= len(self._wps):
             return None
         return self._wps[self._i]
+    
+    def update_and_check_reached(
+        self, 
+        pose: Tuple[Tuple[float, float], float, float]
+    ) -> Tuple[bool, float]:
+        """
+        Update tracking with current pose. Returns (reached, smooth_deviation).
+        Call this every frame with current robot pose.
+        
+        Returns:
+            reached: True if waypoint was just reached (and advanced)
+            smooth_deviation: Smoothed distance to target in mm
+        """
+        if not self.active or self._i >= len(self._wps):
+            return False, 0.0
+            
+        (x, y), heading, conf = pose
+        target_wp = self._wps[self._i]
+        
+        # Calculate distance
+        dx = target_wp.x_mm - x
+        dy = target_wp.y_mm - y
+        raw_distance = math.sqrt(dx**2 + dy**2)
+        
+        # Smooth deviation
+        self._smooth_deviation = (
+            self._deviation_alpha * self._smooth_deviation + 
+            (1.0 - self._deviation_alpha) * raw_distance
+        )
+        
+        # Debounced waypoint detection
+        if raw_distance <= self.p.pos_eps_mm:
+            self._waypoint_stable_count += 1
+            
+            if self._waypoint_stable_count >= self._stable_threshold:
+                # Record for learning before advancing
+                self.reached_history.append(WaypointReached(
+                    waypoint_index=self._i,
+                    target_x_mm=target_wp.x_mm,
+                    target_y_mm=target_wp.y_mm,
+                    actual_x_mm=x,
+                    actual_y_mm=y,
+                    confidence=conf,
+                    timestamp=time.time()
+                ))
+                
+                # Advance waypoint
+                old_idx = self._i
+                self._advance_if_reached(pose)
+                
+                # Reset smoothing on waypoint change
+                if self._i != old_idx:
+                    self._waypoint_stable_count = 0
+                    self._smooth_deviation = 0.0
+                    return True, 0.0  # Waypoint reached!
+        else:
+            self._waypoint_stable_count = 0
+            
+        return False, self._smooth_deviation
 
     def _advance_if_reached(self, pose: Tuple[Tuple[float, float], float, float]) -> None:
         if not self.active or self._i >= len(self._wps):
@@ -134,9 +217,11 @@ class PathRun:
         self.wps: List[Waypoint] = []
         self.follower = PathFollower(FollowerParams())
         self.active = False
+        self.path_name: Optional[str] = None  # For learning
 
-    def load(self, wps: List[Waypoint]) -> None:
+    def load(self, wps: List[Waypoint], path_name: Optional[str] = None) -> None:
         self.wps = wps or []
+        self.path_name = path_name
         self.follower.load_waypoints(self.wps)
 
     def start(self) -> None:
@@ -147,6 +232,28 @@ class PathRun:
     def stop(self) -> None:
         self.active = False
         self.follower.stop()
+        
+    def save_learning_data(self) -> None:
+        """Save waypoint arrival data for learning corrections."""
+        if not self.path_name or not self.follower.reached_history:
+            return
+            
+        from app.path_corrections import PathCorrectionLearner
+        
+        learner = PathCorrectionLearner()
+        learner.current_path_name = self.path_name
+        learner.recording = True
+        
+        for reached in self.follower.reached_history:
+            learner.record_deviation(
+                waypoint_index=reached.waypoint_index,
+                target_mm=(reached.target_x_mm, reached.target_y_mm),
+                actual_mm=(reached.actual_x_mm, reached.actual_y_mm),
+                confidence=reached.confidence,
+                timestamp=reached.timestamp
+            )
+        
+        learner.stop_recording_and_save()
 
     def status(self) -> Dict[str, int | bool]:
         return {"active": self.active, "idx": self.follower.index(), "total": self.follower.total()}

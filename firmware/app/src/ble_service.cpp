@@ -75,15 +75,20 @@ void BleService::init() {
 
 void BleService::send(const char *data, size_t len) {
 
+    // Acquire mutex to prevent race conditions between different threads sending BLE data
+    k_mutex_lock(&send_mutex, K_FOREVER);
+    
     int err = bt_nus_send(NULL, data, len);
     
     if (err < 0 && (err != -EAGAIN) && (err != -ENOTCONN)) {
         printk("BLE_SEND::ERROR: Failed to send data over BLE: %d\n", err);
-        return;
+    } else {
+        #ifdef DEBUG_BLE
+        printk("BLE_SEND::SUCCESS: pid: %hhu msg: %.*s\n", *(uint8_t*)data, len-1, (const char *)(data + 1));
+        #endif
     }
-    #ifdef DEBUG_BLE
-    printk("BLE_SEND::SUCCESS: pid: %hhu msg: %.*s\n", *(uint8_t*)data, len-1, (const char *)(data + 1));
-    #endif
+    
+    k_mutex_unlock(&send_mutex);
 }
 
 void BleService::receive(const void *data, uint16_t len) {

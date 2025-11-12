@@ -1,171 +1,65 @@
-from __future__ import annotations
-import os, time, struct, asyncio, threading
-from typing import List, Tuple, Optional
+# app/bt_link.py
+"""
+BLE Packet Communication Library for Doodle Bot
+- Scans for DEVICE_NAME
+- Connects and subscribes to TX notifications
+- Sends line-by-line with packet IDs and retries
+- Expects "ok" ACK tagged with the same packet ID
+"""
 
-from bleak import BleakClient, BleakScanner  # pip install bleak
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+import threading
+from typing import Optional, Iterable
+
+from bleak import BleakClient, BleakScanner
 
 # Nordic UART UUIDs
-NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-RX_CHAR_UUID     = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write
-TX_CHAR_UUID     = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Notify
+RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write (NUS RX)
+TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Notify (NUS TX)
 
-# Targeting (substring match on name, or exact address if provided)
-_BT_NAME = os.getenv("BT_DEVICE_NAME", "DoodleBot").strip()
-_BT_ADDR = (os.getenv("BT_DEVICE_ADDR", "") or "").lower()
-_SCAN_SECS = float(os.getenv("BT_SCAN_SECONDS", "8"))
+# Target device
+DEVICE_NAME = os.getenv("BT_DEVICE_NAME", "BOO").strip()
+DEVICE_ADDR = os.getenv("BT_DEVICE_ADDR", "").strip()  # optional MAC/UUID hint
+
+# Tuning
+DEFAULT_TIMEOUT_S = float(os.getenv("BT_TIMEOUT_S", "2.0"))
+RETRY_SLEEP_S = float(os.getenv("BT_RETRY_SLEEP_S", "0.10"))
+ERROR_COOLDOWN_S = float(os.getenv("BT_ERROR_COOLDOWN_S", "0.50"))
+MAX_INSTRUCTIONS_AHEAD = int(os.getenv("BT_MAX_AHEAD", "5"))
 
 class BTLink:
-    """Minimal BLE (Nordic UART) transport with packet-ID prefix for each line."""
+    """
+    Threaded BLE link that mirrors the behavior of the standalone BLEPacketHandler,
+    but exposes a simple synchronous API for your Flask routes.
+    """
 
-    HDR_MOVES  = 0xA1
-    HDR_STATUS = 0x55
-    HDR_ACK    = 0xAA
-    HDR_RETRY  = 0xBB
+    def __init__(self, device_name: str = DEVICE_NAME):
+        self.device_name = device_name
+        self.client: Optional[BleakClient] = None
 
-    def __init__(self, port: str = "/dev/null", baud: int = 115200, read_timeout_s: float = 0.02):
-        # Runtime state
-        self._client: Optional[BleakClient] = None
-        self._connected = False
-        self._connected_target = "unknown"
+        # Packet/ACK state
+        self.packet_id_counter: int = -1
+        self.response_received: bool = False
+        self.last_received_packet_id: Optional[int] = None
+        self.last_received_message: Optional[str] = None
 
-        self._idle = True
+        # Sliding window state
+        self.instructions_in_flight: int = 0
+        self.max_ahead: int = MAX_INSTRUCTIONS_AHEAD
 
-        # Packet-ID counter (0..255 wrap)
-        self._pid = -1
+        # Timeouts
+        self.timeout: float = DEFAULT_TIMEOUT_S
 
-        self._rx_flag = False
-        self._rx_time: float = 0.0
-        self._rx_pid: Optional[int] = None
-        self._rx_msg: str = ""
-
+        # Background loop
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._ready_evt: Optional[threading.Event] = None
 
-    # ---------------- Public API ----------------
-
-    def connect(self) -> None:
-        """Scan, connect, and start notifications (blocking until connected)."""
-        self._start_loop()
-        self._run(self._async_connect())
-        self._connected = True
-
-    def close(self) -> None:
-        """Stop notifications, disconnect, and stop the loop."""
-        try:
-            self._run(self._async_close())
-        finally:
-            self._stop_loop()
-            self._connected = False
-
-    def is_idle(self) -> bool:
-        return self._idle
-
-    def wait_idle(self, timeout_s: float = 1.0) -> bool:
-        t0 = time.time()
-        while time.time() - t0 < timeout_s:
-            if self._idle:
-                return True
-            time.sleep(0.02)
-        return self._idle
-
-    def stop(self) -> None:
-        """Send a simple 'pen up/stop' move using the binary header format."""
-        if not self._connected:
-            return
-        payload = struct.pack("<ffb", 0.0, 0.0, +1)  # dz = +1 => pen up/stop
-        pkt = bytes([self.HDR_MOVES, 1]) + payload + bytes([self._checksum(payload)])
-        self._run(self._async_write(pkt, response=False))
-
-    def send_moves_with_dz(self, moves: List[Tuple[float, float, int]]) -> None:
-        """Binary move packets (not used when you send raw G-code — kept for compatibility)."""
-        if not self._connected or not moves:
-            return
-        for dx, dy, dz in moves:
-            dzc = 1 if int(dz) > 0 else (-1 if int(dz) < 0 else 0)
-            payload = struct.pack("<ffb", float(dx), float(dy), dzc)
-            pkt = bytes([self.HDR_MOVES, 1]) + payload + bytes([self._checksum(payload)])
-            self._run(self._async_write(pkt, response=False))
-            time.sleep(0.005)
-
-    def send_gcode(
-        self,
-        gcode_str: str,
-        *,
-        chunk_bytes: int = 120,
-        inter_chunk_s: float = 0.015,   # small pacing
-        eol: str = "\n",
-        write_with_response: bool = False,
-        wait_for_ack: bool = False,
-        max_retries: int = 3,
-    ) -> None:
-        """Line-oriented G-code with packet-id as the first byte, like your test script."""
-        if not gcode_str or not self._connected:
-            return
-
-        lines = [
-            ln.rstrip()
-            for ln in gcode_str.replace("\r\n", "\n").replace("\r", "\n").splitlines()
-            if ln.strip()
-        ]
-        if not lines:
-            return
-
-        for line in lines:
-            # Build packet: <pid><utf8_line + eol>
-            pid = self._next_pid()
-            packet = bytes([pid]) + (line + eol).encode("utf-8")
-
-            # Reset notify tracking
-            self._rx_flag = False
-            self._rx_pid = None
-            self._rx_msg = ""
-            t0 = time.time()
-
-            # Try send (optionally flip response flag if peer rejects)
-            self._run(self._async_write(packet, response=write_with_response))
-
-            if not wait_for_ack:
-                time.sleep(inter_chunk_s)
-                continue
-
-            # Minimal ACK wait loop (expects the peer to echo 'ok' with same pid)
-            ok = False
-            timeout = 2.0
-            end = t0 + timeout
-            while time.time() < end:
-                if self._rx_flag and self._rx_pid == pid and "ok" in self._rx_msg:
-                    ok = True
-                    break
-                time.sleep(0.01)
-
-            if not ok:
-                # simple bounded retry
-                retries = 0
-                while retries < max_retries and not ok:
-                    retries += 1
-                    self._rx_flag = False
-                    self._run(self._async_write(packet, response=write_with_response))
-                    t0 = time.time()
-                    end = t0 + timeout
-                    while time.time() < end:
-                        if self._rx_flag and self._rx_pid == pid and "ok" in self._rx_msg:
-                            ok = True
-                            break
-                        time.sleep(0.01)
-
-            # small pacing either way
-            time.sleep(inter_chunk_s)
-
-    # ---------------- Internals ----------------
-
-    def _next_pid(self) -> int:
-        self._pid = (self._pid + 1) % 256
-        return self._pid
-
-    @staticmethod
-    def _checksum(payload: bytes) -> int:
-        return sum(payload) & 0xFF
+    # ---------------- Core helpers ----------------
 
     def _start_loop(self) -> None:
         if self._loop:
@@ -180,7 +74,6 @@ class BTLink:
 
         self._thread = threading.Thread(target=_runner, daemon=True)
         self._thread.start()
-        assert self._ready_evt is not None
         self._ready_evt.wait()
 
     def _stop_loop(self) -> None:
@@ -198,74 +91,184 @@ class BTLink:
             raise RuntimeError("BLE loop not running")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
+    # ---------------- Public API ----------------
+
+    def connect(self) -> None:
+        """Scan, connect, and start notifications (blocking)."""
+        self._start_loop()
+        self._run(self._async_connect())
+
+    def close(self) -> None:
+        """Stop notifications, disconnect, and stop the loop."""
+        try:
+            self._run(self._async_close())
+        finally:
+            self._stop_loop()
+
+    def disconnect(self) -> None:
+        self.close()
+
+    def send_gcode(self, gcode_text: str) -> None:
+        """
+        Send a G-code string line by line with sliding window flow control.
+        Blocks when max instructions ahead is reached, waiting for ACKs.
+        """
+        if not gcode_text:
+            return
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("Not connected to BLE device")
+
+        # Normalize line endings, keep only non-empty & non-comment lines
+        lines = [
+            ln.strip()
+            for ln in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        ]
+        lines = [ln for ln in lines if ln and not ln.startswith(";")]
+
+        for line in lines:
+            if line.strip().upper().startswith("G91"):
+                line = "G91"
+            if line.strip().upper().startswith("G90"):
+                line = "G90"
+
+            # Block if we have too many instructions in flight
+            while self.instructions_in_flight >= self.max_ahead:
+                time.sleep(0.05)
+
+            data = (line + "\n").encode("utf-8")
+            self._run(self._async_send_packet(data))
+
+    def send_lines(self, lines: Iterable[str]) -> None:
+        """
+        Send an iterable of already-formed G-code lines with sliding window flow control.
+        """
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("Not connected to BLE device")
+        for line in lines:
+            # Block if we have too many instructions in flight
+            while self.instructions_in_flight >= self.max_ahead:
+                time.sleep(0.05)
+            
+            payload = (line.rstrip("\r\n") + "\n").encode("utf-8")
+            self._run(self._async_send_packet(payload))
+
+    # ---------------- Async internals ----------------
+
     async def _async_connect(self):
-        # Choose target by exact addr, else by name substring, else any NUS advertiser
-        devices = await BleakScanner.discover(timeout=_SCAN_SECS)
-        print("Discovered BLE devices:")
-        target = None
-        if _BT_ADDR:
-            target = next((d for d in devices if (getattr(d, "address", "") or "").lower() == _BT_ADDR), None)
-        if not target and _BT_NAME:
-            target = next((d for d in devices if d.name and _BT_NAME.lower() in d.name.lower()), None)
-        print(target)
-        if not target:
-            # fallback: any device advertising NUS service UUID
+        """
+        Discover and connect to the target device; subscribe to TX notifications.
+        """
+        print("Scanning for BLE devices...")
+        devices = await BleakScanner.discover(timeout=5.0)
+
+        # Log discovered devices
+        if devices:
+            print("Discovered devices:")
             for d in devices:
-                meta = getattr(d, "metadata", {}) or {}
-                uuids = [u.lower() for u in meta.get("uuids", []) if isinstance(u, str)]
-                if any(u == NUS_SERVICE_UUID or u.startswith(NUS_SERVICE_UUID[:8]) for u in uuids):
-                    target = d
-                    break
+                print(f"  - Name: {repr(d.name)} | Address: {d.address}")
+        else:
+            print("No BLE devices found.")
+
+        target = None
+
+        # First allow exact/partial name match
+        for d in devices:
+            name = d.name or ""
+            if DEVICE_ADDR and d.address and d.address.lower() == DEVICE_ADDR.lower():
+                target = d
+                print(f"Selected by address: {d.address} ({name})")
+                break
+            if name and (name == self.device_name or self.device_name in name or name in self.device_name):
+                target = d
+                print(f"Selected by name: {name} @ {d.address}")
+                break
+
         if not target:
-            raise RuntimeError("No suitable BLE device found for Nordic UART")
+            raise RuntimeError(f"Device '{self.device_name}' not found.")
 
-        client = BleakClient(target)
-        await client.connect(timeout=6.0)
-        await client.start_notify(TX_CHAR_UUID, self._on_notify)
+        print(f"Connecting to {target.name} ({target.address})...")
+        self.client = BleakClient(target)
+        await self.client.connect()
 
-        self._client = client
-        self._connected = True
-        name = getattr(target, "name", "") or "(no name)"
-        addr = getattr(target, "address", "") or "unknown"
-        self._connected_target = f"{name} ({addr})"
-        print(f"Connected to BLE target: {self._connected_target}")
-        
+        if not self.client.is_connected:
+            raise RuntimeError("BLE connection failed")
+
+        # Subscribe to notifications
+        await self.client.start_notify(TX_CHAR_UUID, self._on_notify)
+        # Small delay to let CCCD settle on some stacks
+        await asyncio.sleep(0.4)
+
+        print("BLE connected and notifications started.")
 
     async def _async_close(self):
-        if self._client:
+        if self.client and self.client.is_connected:
             try:
-                await self._client.stop_notify(TX_CHAR_UUID)
+                await self.client.stop_notify(TX_CHAR_UUID)
             except Exception:
                 pass
             try:
-                await self._client.disconnect()
+                await self.client.disconnect()
             except Exception:
                 pass
-        self._client = None
-        self._connected = False
+            print("BLE disconnected.")
 
-    async def _async_write(self, data: bytes, response: bool = False):
-        if not self._client or not self._client.is_connected:
-            raise RuntimeError("BLE not connected")
-        try:
-            await self._client.write_gatt_char(RX_CHAR_UUID, data, response=response)
-        except Exception as e:
-            if "request not supported" in str(e).lower() or "CBATTErrorDomain Code=6" in str(e):
-                await self._client.write_gatt_char(RX_CHAR_UUID, data, response=not response)
-            else:
-                raise
+    def _next_pid(self) -> int:
+        self.packet_id_counter = (self.packet_id_counter + 1) % 256
+        return self.packet_id_counter
 
-    def _on_notify(self, _uuid: str, data: bytearray):
-        self._rx_time = time.time()
-        self._rx_flag = True
+    def _on_notify(self, _: int, data: bytearray):
+        """
+        Expected firmware ACK format:
+          [pid_byte][utf8 message...], where message is e.g. "ok"
+        
+        ACK indicates stepper movement completion, decrement in-flight counter.
+        """
         if not data:
-            self._rx_pid, self._rx_msg = None, ""
-            return
+            self.last_received_packet_id = None
+            self.last_received_message = None
+        else:
+            self.last_received_packet_id = int(data[0])
+            try:
+                msg = data[1:].decode("utf-8", errors="ignore")
+            except Exception:
+                msg = ""
+            self.last_received_message = "".join(c for c in msg if c.isprintable()).strip()
+            
+            # Decrement in-flight counter when we receive an ACK (ok or fail)
+            if self.last_received_message.lower() in ("ok", "fail"):
+                if self.instructions_in_flight > 0:
+                    self.instructions_in_flight -= 1
+                    print(f"RECEIVE::ACK pid:{self.last_received_packet_id} msg:{self.last_received_message} pending:{self.instructions_in_flight}")
+        
+        self.response_received = True
 
-        b0 = data[0]
-        if b0 == self.HDR_STATUS and len(data) >= 2:
-            self._idle = bool(data[1] & 0x01)
-            return
+    async def _async_send_packet(self, payload: bytes):
+        """
+        Send packet and increment in-flight counter immediately.
+        No longer waits for ACK (fire-and-forget).
+        Sliding window in send_gcode/send_lines handles throttling.
+        """
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("BLE not connected")
 
-        self._rx_pid = b0
-        self._rx_msg = data[1:].decode(errors="ignore").strip()
+        packet_id = self._next_pid()
+        packet = bytes([packet_id]) + payload
+
+        try:
+            if not self.client.is_connected:
+                raise RuntimeError("BLE connection lost")
+
+            # Increment in-flight BEFORE sending to enforce window strictly
+            self.instructions_in_flight += 1
+
+            await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
+            print(f"SEND::QUEUED pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()} pending:{self.instructions_in_flight}")
+
+        except Exception as e:
+            print(f"BLE Error sending packet {packet_id}: {e}")
+            # Roll back in-flight counter on send failure
+            if self.instructions_in_flight > 0:
+                self.instructions_in_flight -= 1
+            if "not supported" in str(e).lower() or "connection" in str(e).lower():
+                raise
+            await asyncio.sleep(ERROR_COOLDOWN_S)

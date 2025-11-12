@@ -1,16 +1,20 @@
 from __future__ import annotations
+import os
 import re
 from typing import List, Tuple, Optional
 
-__all__ = ["load_gcode_file", "ops_to_gcode", "moves_to_gcode", "convert_pathfinding_gcode"]
+__all__ = [
+    "load_gcode_file",
+    "convert_pathfinding_gcode",
+    "scale_gcode_to_board",
+]
 
 _NUM_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 
 def load_gcode_file(path: str) -> List[Tuple]:
     """
     Returns ops as:
-      - ("move", dx, dy, dz)   # incremental (G91) move in mm; dz ∈ {-1,0,1} meaning:
-                               #   +1 pen UP after move, 0 no change, -1 pen DOWN after move
+      - ("move", dx, dy)       # incremental (G91) move in mm
       - ("pen", True|False)    # True = down (M3), False = up (M5)
     """
     text = _read_text(path)
@@ -43,28 +47,19 @@ def load_gcode_file(path: str) -> List[Tuple]:
 
         dx = _match_float(r"\bX(" + _NUM_RE + r")\b", u)
         dy = _match_float(r"\bY(" + _NUM_RE + r")\b", u)
-        dz = _match_float(r"\bZ(" + _NUM_RE + r")\b", u)
 
-        if dx is None or dy is None or dz is None:
+        if dx is None or dy is None:
             tail = re.sub(r"^\s*G[01]\s*", "", line, flags=re.I)
             nums = re.findall(_NUM_RE, tail)
             if dx is None and len(nums) >= 1: dx = float(nums[0])
             if dy is None and len(nums) >= 2: dy = float(nums[1])
-            if dz is None and len(nums) >= 3: dz = float(nums[2])
 
-        dx = float(dx) if dx is not None else 0.0
-        dy = float(dy) if dy is not None else 0.0
-        dz_i = 0
-        if dz is not None:
-            zf = float(dz)
-            dz_i = 1 if zf > 0 else (-1 if zf < 0 else 0)
+        dx = int(round(float(dx))) if dx is not None else 0
+        dy = int(round(float(dy))) if dy is not None else 0
 
         if inc_mode:
-            if dx != 0.0 or dy != 0.0 or dz_i != 0:
-                ops.append(("move", dx, dy, dz_i))
-        else:
-            if dz_i != 0:
-                ops.append(("pen", False if dz_i > 0 else True))
+            if dx != 0 or dy != 0:
+                ops.append(("move", dx, dy))
 
     return ops
 
@@ -82,175 +77,214 @@ def _match_float(pat: str, s: str) -> Optional[float]:
         return None
 
 
-def ops_to_gcode(ops: List[Tuple]) -> str:
-    """
-    Convert parsed operations back to G-code string format.
-    
-    Supported firmware commands:
-    - G91: Enable relative positioning
-    - G1 X<mm> Y<mm>: Linear interpolated movement  
-    - M280 P<servo> S<position>: Move servo (P0=pen, P1=eraser, S=0-180)
-    
-    Args:
-        ops: List of operations from load_gcode_file()
-             - ("move", dx, dy, dz) where dz: +1=pen up, -1=pen down, 0=no change
-             - ("pen", bool) where True=down, False=up
-    
-    Returns:
-        G-code string ready to send via BTLink.send_gcode()
-    
-    Example:
-        ops = [("pen", False), ("move", 10.0, -5.0, 0), ("pen", True)]
-        gcode = ops_to_gcode(ops)
-        # Returns: "G91\\nM280 P0 S90\\nG1 X10.0 Y-5.0\\nM280 P0 S0\\n"
-    """
-    lines = ["G91"]  # Always start in relative mode
-    
-    for op in ops:
-        if op[0] == "pen":
-            pen_down = op[1]
-            if pen_down:
-                # Pen down: M280 P0 (pen servo) S0 (down position)
-                lines.append("M280 P0 S0")
-            else:
-                # Pen up: M280 P0 (pen servo) S90 (up position)
-                lines.append("M280 P0 S90")
-                
-        elif op[0] == "move":
-            _, dx, dy, dz = op
-            
-            # Handle pen change before move if dz != 0
-            if dz < 0:  # Pen down before move
-                lines.append("M280 P0 S0")
-            elif dz > 0:  # Pen up before move
-                lines.append("M280 P0 S90")
-            
-            # Add move command if there's actual movement
-            if dx != 0.0 or dy != 0.0:
-                lines.append(f"G1 X{dx:.3f} Y{dy:.3f}")
-    
-    return "\n".join(lines) + "\n"
-
-
-def moves_to_gcode(moves: List[Tuple[float, float, int]]) -> str:
-    """
-    Convert list of (dx, dy, dz) moves to G-code string.
-    
-    This is a convenience function for converting the format used by
-    send_moves_with_dz() to the G-code format for send_gcode().
-    
-    Args:
-        moves: List of (dx, dy, dz) tuples where:
-               dx, dy: Movement in mm
-               dz: +1=pen up after, -1=pen down after, 0=no change
-    
-    Returns:
-        G-code string
-    
-    Example:
-        moves = [(10.0, 5.0, 0), (5.0, -3.0, 1)]
-        gcode = moves_to_gcode(moves)
-        bt.send_gcode(gcode)
-    """
-    ops = [("move", dx, dy, dz) for dx, dy, dz in moves]
-    return ops_to_gcode(ops)
+# Note: ops_to_gcode and moves_to_gcode were removed as the codebase now
+# exclusively transmits full G-code over BLE (no legacy move streaming).
 
 
 def convert_pathfinding_gcode(gcode_text: str) -> str:
     """
-    Convert pathfinding G-code format to firmware-compatible format.
-    
-    Handles two pathfinding formats:
-    1. M3/M5 format (manual files): M3 (pen down), M5 (pen up)
-    2. G1 X Y Z format (generated files): Z=-1 (pen down), Z=1 (pen up), Z=0 (no change)
-    
-    Conversions:
-    - M3 (pen down) → M280 P0 S0
-    - M5 (pen up) → M280 P0 S90
-    - G1 X Y -1 → M280 P0 S0 (pen down), then G1 X Y
-    - G1 X Y 1 → G1 X Y, then M280 P0 S90 (pen up)
-    - G1 X Y 0 → G1 X Y (no pen change)
-    - G90 (absolute) → removed (firmware only supports G91)
-    - Comments (;) → removed
-    
-    The firmware supports:
-    - G91: Relative positioning
-    - G1 X<mm> Y<mm>: Linear movement
-    - M280 P<servo> S<position>: Servo control
+    Normalize pathfinding G-code to the firmware subset:
+    - Drop G90 (firmware rejects it)
+    - Keep G91 (relative mode)
+    - Keep G0/G1 lines (as written)
+    - Map M3→M280 P0 S0 (down), M5→M280 P0 S90 (up)
+    - Pass through existing M280 lines
+    - Strip comments/blank lines
+    """
+    # First pass: gather lines and detect source modality hints
+    out_lines: List[str] = []
+    src_has_g91 = False
+    src_has_g90 = False
+    for raw in gcode_text.splitlines():
+        line = raw.split(";")[0].strip()
+        if not line:
+            continue
+        u = line.upper()
+
+        # map legacy pen cmds
+        if u.startswith("M3") or u == "M03":
+            out_lines.append("M280 P0 S0")
+            continue
+        if u.startswith("M5") or u == "M05":
+            out_lines.append("M280 P0 S90")
+            continue
+
+        # Track modality hints from source
+        if u.startswith("G91"):
+            src_has_g91 = True
+            continue  # we will inject a single G91 later
+        if u.startswith("G90"):
+            src_has_g90 = True
+            continue  # firmware doesn't accept G90; we'll convert to relative
+
+        # pass pen servo through
+        if u.startswith("M280"):
+            out_lines.append(line)
+            continue
+
+        # pass motion through
+        if u.startswith(("G0", "G1")):
+            out_lines.append(line)
+            continue
+
+        # ignore everything else
+
+    # Decide if source moves should be treated as absolute
+    treat_as_absolute = src_has_g90 or (not src_has_g91)
+
+    # If treating as absolute, convert G0/G1 X/Y to relative deltas
+    if out_lines and treat_as_absolute:
+        rel_lines: List[str] = []
+        last_x: Optional[float] = None
+        last_y: Optional[float] = None
+        for line in out_lines:
+            u = line.upper()
+            if u.startswith(("G0", "G1")):
+                m_cmd = re.match(r"^(G0|G1)\b", line, flags=re.IGNORECASE)
+                cmd = m_cmd.group(1).upper() if m_cmd else "G1"
+                mx = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                my = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+
+                parts: List[str] = [cmd]
+                if mx:
+                    x_val = float(mx.group(1))
+                    dx = int(round(x_val - (last_x if last_x is not None else 0.0)))
+                    if abs(dx) >= 1:
+                        parts.append(f"X{dx}")
+                    last_x = x_val
+                if my:
+                    y_val = float(my.group(1))
+                    dy = int(round(y_val - (last_y if last_y is not None else 0.0)))
+                    if abs(dy) >= 1:
+                        parts.append(f"Y{dy}")
+                    last_y = y_val
+
+                rel_lines.append(" ".join(parts))
+            else:
+                rel_lines.append(line)
+        out_lines = rel_lines
+
+    # Always enforce a single G91 at the top before any motion/pen commands
+    if out_lines:
+        has_g91 = any(l.upper().startswith("G91") for l in out_lines)
+        if not has_g91:
+            out_lines.insert(0, "G91")
+
+    # Segment large relative moves into smaller chunks to ensure timely ACKs.
+    # This applies whether the source was already relative or we converted it.
+    if out_lines:
+        try:
+            max_seg = float(os.getenv("GCODE_MAX_SEG_MM", "30.0"))
+        except Exception:
+            max_seg = 30.0
+        if max_seg > 0:
+            segmented: List[str] = []
+            for line in out_lines:
+                u = line.upper()
+                if u.startswith(("G0", "G1")):
+                    mx = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                    my = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                    dx = int(round(float(mx.group(1)))) if mx else 0
+                    dy = int(round(float(my.group(1)))) if my else 0
+
+                    # steps based on max axis distance
+                    import math
+                    dist = max(abs(dx), abs(dy))
+                    if dist <= max_seg or dist == 0:
+                        # emit only non-zero axes to reduce parser edge cases
+                        parts = ["G1"]
+                        if abs(dx) >= 1:
+                            parts.append(f"X{dx}")
+                        if abs(dy) >= 1:
+                            parts.append(f"Y{dy}")
+                        segmented.append(" ".join(parts))
+                    else:
+                        steps = max(1, int(math.ceil(dist / max_seg)))
+                        step_dx = int(round(dx / steps))
+                        step_dy = int(round(dy / steps))
+                        # Emit steps-1 uniform, and adjust the last to hit exact target
+                        for i in range(steps - 1):
+                            parts = ["G1"]
+                            if abs(step_dx) >= 1:
+                                parts.append(f"X{step_dx}")
+                            if abs(step_dy) >= 1:
+                                parts.append(f"Y{step_dy}")
+                            segmented.append(" ".join(parts))
+                        last_dx = dx - step_dx * (steps - 1)
+                        last_dy = dy - step_dy * (steps - 1)
+                        parts = ["G1"]
+                        if abs(last_dx) >= 1:
+                            parts.append(f"X{last_dx}")
+                        if abs(last_dy) >= 1:
+                            parts.append(f"Y{last_dy}")
+                        segmented.append(" ".join(parts))
+                else:
+                    segmented.append(line)
+            out_lines = segmented
+
+    return ("\n".join(out_lines) + "\n") if out_lines else ""
+
+
+def scale_gcode_to_board(
+    gcode_text: str,
+    source_size_mm: Tuple[float, float],
+    target_size_mm: Tuple[float, float],
+) -> str:
+    """
+    Scale G-code coordinates from pathfinding canvas to actual detected board size.
     
     Args:
-        gcode_text: G-code string from pathfinding
+        gcode_text: G-code from pathfinding (in pathfinding canvas coordinates)
+        source_size_mm: (width, height) of pathfinding canvas in mm
+        target_size_mm: (width, height) of actual detected board in mm
     
     Returns:
-        Firmware-compatible G-code string (with M280 commands)
-    
-    Example:
-        with open("pathfinding/draw.gcode") as f:
-            original = f.read()
-        compatible = convert_pathfinding_gcode(original)
-        bt.send_gcode(compatible, wait_for_ack=False)
-    """
-    lines = []
-    
-    for raw_line in gcode_text.splitlines():
-        # Remove comments
-        line = raw_line.split(";")[0].strip()
+        Scaled G-code with coordinates adjusted to target board size
         
-        # Skip empty lines
+    Example:
+        # Pathfinding uses 575x730 canvas → 200x250 mm
+        # Actual board detected as 200x250 mm
+        source = (200.0, 250.0)  # pathfinding assumes this size
+        target = cvp.board_size_mm()  # actual detected size (200, 250)
+        scaled = scale_gcode_to_board(pathfinding_gcode, source, target)
+    """
+    if not gcode_text or source_size_mm == target_size_mm:
+        return gcode_text
+    
+    scale_x = target_size_mm[0] / source_size_mm[0]
+    scale_y = target_size_mm[1] / source_size_mm[1]
+    
+    lines = []
+    for raw_line in gcode_text.splitlines():
+        line = raw_line.split(";")[0].strip()
         if not line:
             continue
         
         line_upper = line.upper()
         
-        # Convert M3 (pen down) to M280 P0 S0
-        if line_upper.startswith("M3") or line_upper == "M03":
-            lines.append("M280 P0 S0")
-            continue
-        
-        # Convert M5 (pen up) to M280 P0 S90
-        if line_upper.startswith("M5") or line_upper == "M05":
-            lines.append("M280 P0 S90")
-            continue
-        
-        # Skip G90 (firmware only supports relative mode)
-        if line_upper.startswith("G90"):
-            continue
-        
-        # Handle G1 X Y Z format (from path2gcode.py output)
-        if line_upper.startswith(("G0 ", "G1 ")):
-            # Parse the line to extract X, Y, Z values
-            parts = line.split()
-            if len(parts) >= 4:  # G1 X Y Z format
-                try:
-                    x = float(parts[1])
-                    y = float(parts[2])
-                    z = int(float(parts[3]))
-                    
-                    # Handle pen state before move
-                    if z == -1:  # Pen down before move
-                        lines.append("M280 P0 S0")
-                    elif z == 1:  # Pen up after move (we'll add it after)
-                        pass
-                    
-                    # Add the move command (without Z)
-                    lines.append(f"G1 X{x} Y{y}")
-                    
-                    # Handle pen state after move
-                    if z == 1:  # Pen up after move
-                        lines.append("M280 P0 S90")
-                    
-                    continue
-                except (ValueError, IndexError):
-                    # If parsing fails, treat as regular G1 command
-                    pass
-            
-            # Regular G1 X Y format (no Z) - keep as-is
+        # Scale G0/G1 commands only
+        if line_upper.startswith(("G0 ", "G1 ", "G0\t", "G1\t", "G0", "G1")):
+            # Preserve the command (G0/G1) exactly as written at the start
+            m_cmd = re.match(r"^(G0|G1)\b", line, flags=re.IGNORECASE)
+            cmd = m_cmd.group(1).upper() if m_cmd else line[:2].upper()
+
+            # Extract X and Y values using the robust numeric regex
+            x_match = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+            y_match = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+
+            if x_match or y_match:
+                parts: List[str] = [cmd]
+                if x_match:
+                    x_val = int(round(float(x_match.group(1)) * scale_x))
+                    parts.append(f"X{x_val}")
+                if y_match:
+                    y_val = int(round(float(y_match.group(1)) * scale_y))
+                    parts.append(f"Y{y_val}")
+                lines.append(" ".join(parts))
+            else:
+                lines.append(f"{cmd}")
+        else:
+            # Keep all other commands as-is (M280, G91, etc.)
             lines.append(line)
-            continue
-        
-        # Keep G91 and M280 commands as-is
-        if line_upper.startswith(("G91", "M280")):
-            lines.append(line)
-            continue
     
     return "\n".join(lines) + "\n" if lines else ""

@@ -24,6 +24,7 @@ public:
     };
 
     struct GCodeCmd {
+        uint8_t packet_id; // Packet ID of this command
         char code;      // 'G' or 'M'
         int number;     // e.g. 91, 0, 280
         Arg args[MAX_ARGS];
