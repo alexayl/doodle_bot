@@ -29,6 +29,7 @@ DEVICE_ADDR = os.getenv("BT_DEVICE_ADDR", "").strip()  # optional MAC/UUID hint
 DEFAULT_TIMEOUT_S = float(os.getenv("BT_TIMEOUT_S", "2.0"))
 RETRY_SLEEP_S = float(os.getenv("BT_RETRY_SLEEP_S", "0.10"))
 ERROR_COOLDOWN_S = float(os.getenv("BT_ERROR_COOLDOWN_S", "0.50"))
+MAX_INSTRUCTIONS_AHEAD = int(os.getenv("BT_MAX_AHEAD", "5"))
 
 class BTLink:
     """
@@ -45,6 +46,10 @@ class BTLink:
         self.response_received: bool = False
         self.last_received_packet_id: Optional[int] = None
         self.last_received_message: Optional[str] = None
+
+        # Sliding window state
+        self.instructions_in_flight: int = 0
+        self.max_ahead: int = MAX_INSTRUCTIONS_AHEAD
 
         # Timeouts
         self.timeout: float = DEFAULT_TIMEOUT_S
@@ -105,8 +110,8 @@ class BTLink:
 
     def send_gcode(self, gcode_text: str) -> None:
         """
-        Send a G-code string line by line with packet IDs and retries.
-        Ignores blank lines and pure comment lines.
+        Send a G-code string line by line with sliding window flow control.
+        Blocks when max instructions ahead is reached, waiting for ACKs.
         """
         if not gcode_text:
             return
@@ -126,16 +131,24 @@ class BTLink:
             if line.strip().upper().startswith("G90"):
                 line = "G90"
 
+            # Block if we have too many instructions in flight
+            while self.instructions_in_flight >= self.max_ahead:
+                time.sleep(0.05)
+
             data = (line + "\n").encode("utf-8")
             self._run(self._async_send_packet(data))
 
     def send_lines(self, lines: Iterable[str]) -> None:
         """
-        Send an iterable of already-formed G-code lines (str). Newlines appended automatically.
+        Send an iterable of already-formed G-code lines with sliding window flow control.
         """
         if not self.client or not self.client.is_connected:
             raise RuntimeError("Not connected to BLE device")
         for line in lines:
+            # Block if we have too many instructions in flight
+            while self.instructions_in_flight >= self.max_ahead:
+                time.sleep(0.05)
+            
             payload = (line.rstrip("\r\n") + "\n").encode("utf-8")
             self._run(self._async_send_packet(payload))
 
@@ -207,6 +220,8 @@ class BTLink:
         """
         Expected firmware ACK format:
           [pid_byte][utf8 message...], where message is e.g. "ok"
+        
+        ACK indicates stepper movement completion, decrement in-flight counter.
         """
         if not data:
             self.last_received_packet_id = None
@@ -218,57 +233,42 @@ class BTLink:
             except Exception:
                 msg = ""
             self.last_received_message = "".join(c for c in msg if c.isprintable()).strip()
+            
+            # Decrement in-flight counter when we receive an ACK (ok or fail)
+            if self.last_received_message.lower() in ("ok", "fail"):
+                if self.instructions_in_flight > 0:
+                    self.instructions_in_flight -= 1
+                    print(f"RECEIVE::ACK pid:{self.last_received_packet_id} msg:{self.last_received_message} pending:{self.instructions_in_flight}")
+        
         self.response_received = True
 
     async def _async_send_packet(self, payload: bytes):
         """
-        Send a single packet with retry-until-ACK behavior.
-
-        Resync rule: if device replies 'ok' but PID differs, treat as success
-        and snap our counter to the device's PID to realign.
+        Send packet and increment in-flight counter immediately.
+        No longer waits for ACK (fire-and-forget).
+        Sliding window in send_gcode/send_lines handles throttling.
         """
         if not self.client or not self.client.is_connected:
             raise RuntimeError("BLE not connected")
 
         packet_id = self._next_pid()
         packet = bytes([packet_id]) + payload
-        expected = "ok"
 
-        while True:
-            try:
-                if not self.client.is_connected:
-                    raise RuntimeError("BLE connection lost")
+        try:
+            if not self.client.is_connected:
+                raise RuntimeError("BLE connection lost")
 
-                await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
-                t0 = time.time()
-                self.response_received = False
-                print(f"SEND::SUCCESS pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()}")
+            # Increment in-flight BEFORE sending to enforce window strictly
+            self.instructions_in_flight += 1
 
-                # Wait for notify
-                while not self.response_received and (time.time() - t0) < self.timeout:
-                    await asyncio.sleep(0.01)
+            await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=False)
+            print(f"SEND::QUEUED pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()} pending:{self.instructions_in_flight}")
 
-                msg = (self.last_received_message or "").strip().lower()
-                pid = self.last_received_packet_id
-
-                # Exact match → success
-                if pid == packet_id and msg == expected:
-                    print(f"RECEIVE::SUCCESS pid:{packet_id} msg:'{self.last_received_message}'")
-                    return
-
-                # Resync if device says ok but pid differs (eg. after MCU reboot)
-                if msg == expected and pid is not None and pid != packet_id:
-                    print(f"RECEIVE::RESYNC host_pid:{packet_id} device_pid:{pid} msg:'{self.last_received_message}'")
-                    # Snap our counter to the device's PID so next _next_pid() follows device
-                    self.packet_id_counter = pid % 256
-                    return
-
-                # Otherwise retry
-                print(f"RECEIVE::FAIL pid:{packet_id} nack:'{self.last_received_message}' (expected '{expected}')")
-                await asyncio.sleep(RETRY_SLEEP_S)
-
-            except Exception as e:
-                print(f"BLE Error sending packet {packet_id}: {e}")
-                if "not supported" in str(e).lower() or "connection" in str(e).lower():
-                    raise
-                await asyncio.sleep(ERROR_COOLDOWN_S)
+        except Exception as e:
+            print(f"BLE Error sending packet {packet_id}: {e}")
+            # Roll back in-flight counter on send failure
+            if self.instructions_in_flight > 0:
+                self.instructions_in_flight -= 1
+            if "not supported" in str(e).lower() or "connection" in str(e).lower():
+                raise
+            await asyncio.sleep(ERROR_COOLDOWN_S)

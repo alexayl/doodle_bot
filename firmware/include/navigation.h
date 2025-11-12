@@ -4,7 +4,7 @@
 #include "peripheral_wrappers.h"
 #include <zephyr/kernel.h>
 
-#define DEBUG_NAV
+// #define DEBUG_NAV
 
 
 #define PI                      (3.14159265359f)
@@ -27,8 +27,9 @@ struct NavCommand {
 
 // signed velocity command for each stepper motor deg/s
 struct StepCommand {
-    int16_t left_velocity;
-    int16_t right_velocity;
+    uint8_t packet_id;
+    int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
+    int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
 
     void print() const {
         printk("StepCommand: left_velocity=%d, right_velocity=%d\n", left_velocity, right_velocity);

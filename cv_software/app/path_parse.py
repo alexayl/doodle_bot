@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import re
 from typing import List, Tuple, Optional
 
@@ -53,11 +54,11 @@ def load_gcode_file(path: str) -> List[Tuple]:
             if dx is None and len(nums) >= 1: dx = float(nums[0])
             if dy is None and len(nums) >= 2: dy = float(nums[1])
 
-        dx = float(dx) if dx is not None else 0.0
-        dy = float(dy) if dy is not None else 0.0
+        dx = int(round(float(dx))) if dx is not None else 0
+        dy = int(round(float(dy))) if dy is not None else 0
 
         if inc_mode:
-            if dx != 0.0 or dy != 0.0:
+            if dx != 0 or dy != 0:
                 ops.append(("move", dx, dy))
 
     return ops
@@ -90,7 +91,10 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
     - Pass through existing M280 lines
     - Strip comments/blank lines
     """
+    # First pass: gather lines and detect source modality hints
     out_lines: List[str] = []
+    src_has_g91 = False
+    src_has_g90 = False
     for raw in gcode_text.splitlines():
         line = raw.split(";")[0].strip()
         if not line:
@@ -105,15 +109,13 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             out_lines.append("M280 P0 S90")
             continue
 
-        # drop absolute mode
-        if u.startswith("G90"):
-            # out_lines.append("G90")
-            continue
-
-        # keep relative mode
+        # Track modality hints from source
         if u.startswith("G91"):
-            out_lines.append("G91")
-            continue
+            src_has_g91 = True
+            continue  # we will inject a single G91 later
+        if u.startswith("G90"):
+            src_has_g90 = True
+            continue  # firmware doesn't accept G90; we'll convert to relative
 
         # pass pen servo through
         if u.startswith("M280"):
@@ -126,6 +128,100 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             continue
 
         # ignore everything else
+
+    # Decide if source moves should be treated as absolute
+    treat_as_absolute = src_has_g90 or (not src_has_g91)
+
+    # If treating as absolute, convert G0/G1 X/Y to relative deltas
+    if out_lines and treat_as_absolute:
+        rel_lines: List[str] = []
+        last_x: Optional[float] = None
+        last_y: Optional[float] = None
+        for line in out_lines:
+            u = line.upper()
+            if u.startswith(("G0", "G1")):
+                m_cmd = re.match(r"^(G0|G1)\b", line, flags=re.IGNORECASE)
+                cmd = m_cmd.group(1).upper() if m_cmd else "G1"
+                mx = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                my = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+
+                parts: List[str] = [cmd]
+                if mx:
+                    x_val = float(mx.group(1))
+                    dx = int(round(x_val - (last_x if last_x is not None else 0.0)))
+                    if abs(dx) >= 1:
+                        parts.append(f"X{dx}")
+                    last_x = x_val
+                if my:
+                    y_val = float(my.group(1))
+                    dy = int(round(y_val - (last_y if last_y is not None else 0.0)))
+                    if abs(dy) >= 1:
+                        parts.append(f"Y{dy}")
+                    last_y = y_val
+
+                rel_lines.append(" ".join(parts))
+            else:
+                rel_lines.append(line)
+        out_lines = rel_lines
+
+    # Always enforce a single G91 at the top before any motion/pen commands
+    if out_lines:
+        has_g91 = any(l.upper().startswith("G91") for l in out_lines)
+        if not has_g91:
+            out_lines.insert(0, "G91")
+
+    # Segment large relative moves into smaller chunks to ensure timely ACKs.
+    # This applies whether the source was already relative or we converted it.
+    if out_lines:
+        try:
+            max_seg = float(os.getenv("GCODE_MAX_SEG_MM", "30.0"))
+        except Exception:
+            max_seg = 30.0
+        if max_seg > 0:
+            segmented: List[str] = []
+            for line in out_lines:
+                u = line.upper()
+                if u.startswith(("G0", "G1")):
+                    mx = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                    my = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
+                    dx = int(round(float(mx.group(1)))) if mx else 0
+                    dy = int(round(float(my.group(1)))) if my else 0
+
+                    # steps based on max axis distance
+                    import math
+                    dist = max(abs(dx), abs(dy))
+                    if dist <= max_seg or dist == 0:
+                        # emit only non-zero axes to reduce parser edge cases
+                        parts = ["G1"]
+                        if abs(dx) >= 1:
+                            parts.append(f"X{dx}")
+                        if abs(dy) >= 1:
+                            parts.append(f"Y{dy}")
+                        segmented.append(" ".join(parts))
+                    else:
+                        steps = max(1, int(math.ceil(dist / max_seg)))
+                        step_dx = int(round(dx / steps))
+                        step_dy = int(round(dy / steps))
+                        # Emit steps-1 uniform, and adjust the last to hit exact target
+                        for i in range(steps - 1):
+                            parts = ["G1"]
+                            if abs(step_dx) >= 1:
+                                parts.append(f"X{step_dx}")
+                            if abs(step_dy) >= 1:
+                                parts.append(f"Y{step_dy}")
+                            segmented.append(" ".join(parts))
+                        last_dx = dx - step_dx * (steps - 1)
+                        last_dy = dy - step_dy * (steps - 1)
+                        parts = ["G1"]
+                        if abs(last_dx) >= 1:
+                            parts.append(f"X{last_dx}")
+                        if abs(last_dy) >= 1:
+                            parts.append(f"Y{last_dy}")
+                        segmented.append(" ".join(parts))
+                else:
+                    segmented.append(line)
+            out_lines = segmented
+
     return ("\n".join(out_lines) + "\n") if out_lines else ""
 
 
@@ -179,11 +275,11 @@ def scale_gcode_to_board(
             if x_match or y_match:
                 parts: List[str] = [cmd]
                 if x_match:
-                    x_val = float(x_match.group(1)) * scale_x
-                    parts.append(f"X{x_val:.3f}")
+                    x_val = int(round(float(x_match.group(1)) * scale_x))
+                    parts.append(f"X{x_val}")
                 if y_match:
-                    y_val = float(y_match.group(1)) * scale_y
-                    parts.append(f"Y{y_val:.3f}")
+                    y_val = int(round(float(y_match.group(1)) * scale_y))
+                    parts.append(f"Y{y_val}")
                 lines.append(" ".join(parts))
             else:
                 lines.append(f"{cmd}")

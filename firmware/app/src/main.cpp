@@ -46,6 +46,8 @@ static int hardware_init() {
         printk("ERROR: Stepper initialization failed: %d\n", ret);
         return ret;
     }
+
+    printk("Hardware initialized successfully\n");
     
     return 0;
 }
