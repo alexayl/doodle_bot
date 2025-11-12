@@ -14,8 +14,9 @@
 
 LOG_MODULE_REGISTER(stepper, CONFIG_LOG_DEFAULT_LEVEL);
 
-/* Direction inversion - set to true to invert direction logic */
-#define INVERT_DIRECTION false
+/* Per-motor direction inversion */
+#define INVERT_LEFT_DIRECTION true   // Left motor is physically backwards
+#define INVERT_RIGHT_DIRECTION false // Right motor is correct
 
 /* Stepper motor devicetree nodes */
 #define STEPPER_LEFT_NODE  DT_NODELABEL(stepper_left)
@@ -234,13 +235,14 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
 
     /* Only set direction when actually moving (not when stopping) */
     if (step_freq_hz > 0) {
-        /* Set direction with optional inversion */
-        bool dir_pin_value = INVERT_DIRECTION ? !clockwise : clockwise;
+        /* Set direction with per-motor inversion */
+        bool invert_this_motor = (motor == STEPPER_LEFT) ? INVERT_LEFT_DIRECTION : INVERT_RIGHT_DIRECTION;
+        bool dir_pin_value = invert_this_motor ? !clockwise : clockwise;
         gpio_pin_set_dt(dir, dir_pin_value ? 1 : 0);
         
         LOG_INF("Motor %d Direction set: %s (pin=%d, inverted=%s)", motor, 
                 clockwise ? "CLOCKWISE" : "COUNTERCLOCKWISE", dir_pin_value ? 1 : 0,
-                INVERT_DIRECTION ? "yes" : "no");
+                invert_this_motor ? "yes" : "no");
     }
     
     /* Small delay to ensure direction is set before stepping starts */
