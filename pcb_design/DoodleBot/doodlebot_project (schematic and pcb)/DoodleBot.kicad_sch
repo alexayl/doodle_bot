@@ -7112,7 +7112,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Button_Switch_SMD:Panasonic_EVQPUJ_EVQPUA"
+		(property "Footprint" "Button_Switch_SMD:SW_SPST_PTS647_Sx38"
 			(at 41.91 149.86 0)
 			(effects
 				(font
@@ -11884,7 +11884,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Button_Switch_SMD:Panasonic_EVQPUJ_EVQPUA"
+		(property "Footprint" "Button_Switch_SMD:SW_SPST_PTS647_Sx38"
 			(at 54.61 149.86 0)
 			(effects
 				(font
