@@ -41,12 +41,12 @@ static void hardware_init_work_handler(struct k_work *work) {
     printk("Starting hardware initialization...\n");
     
     // TODO: init hardware peripherals as they are added
-    int ret = stepper_init();
+    int ret = 0;
+    ret = stepper_init();
     
     if (ret < 0) {
         printk("ERROR: Stepper initialization failed: %d\n", ret);
-        printk("FATAL: Hardware initialization failed, system halted\n");
-        k_panic();
+        post_state_event(Event::InitError);
     }
 
     printk("Hardware initialization completed successfully\n");
