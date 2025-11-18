@@ -3,19 +3,14 @@
 #include "instruction_parser.h"
 #include "peripheral_wrappers.h"
 #include <zephyr/kernel.h>
-
-// #define DEBUG_NAV
+#include "config.h"
 
 
 #define PI                      (3.14159265359f)
 
-#define WHEEL_RADIUS            (48.0f)    // radius of the wheels on each stepper motor
-#define DOODLEBOT_RADIUS        (165.0f)   // distance from center of doodlebot to wheel
-
-#define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
 #define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence
 
-#define MAX_LINEAR_VELOCITY     (200.0f) // maximum linear velocity (mm/s)
+// MAX_LINEAR_VELOCITY is defined in config.h
 
 #define DEG_TO_RAD(deg)         ((deg) * PI / 180.0f)
 #define RAD_TO_DEG(rad)         ((rad) * 180.0f / PI)
@@ -84,8 +79,16 @@ private:
     static float theta_current_;
 
 public: // Made public for testing
-    int interpolate();          // G-code -> (r, theta)
-    int discretize();           // (r, theta) -> (vL, vR)
+    int interpolate();          // G-code -> (r, theta) - reads from current_instruction_, writes to nav_queue
+    int discretize();           // (r, theta) -> (vL, vR) - reads from nav_queue, writes to step_queue
+    
+    // Pure computation functions for testing
+    static int interpolate(int x_delta, int y_delta,
+                          float& theta_current,
+                          void (*output_fn)(const NavCommand&));
+    static int discretize(const NavCommand& nav_command,
+                         uint8_t packet_id,
+                         void (*output_fn)(const StepCommand&));
 private:
 };
 

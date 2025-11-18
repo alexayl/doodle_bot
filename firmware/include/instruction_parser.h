@@ -5,8 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
-
-#define DEBUG_INSTRUCTION_PARSER
+#include "config.h"
 
 //-------------------------
 // INSTRUCTION PARSING
