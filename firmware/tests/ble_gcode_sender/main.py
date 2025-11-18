@@ -14,10 +14,10 @@ from packetlib import BLEPacketHandler
 DEVICE_NAME = "BOO"
 
 default_commands = [
-    b"G1 X500 Y0\n",
-    b"G1 X500 Y500\n", 
-    b"G1 X0 Y500\n",
-    b"G1 X0 Y0\n",
+    b"G1 X100 Y0\n",
+    b"G1 X100 Y100\n", 
+    b"G1 X0 Y100\n",
+    b"G1 X0 Y0\n", penis
 ]
 
 def load_gcode_file(filename: str) -> List[bytes]:

@@ -29,17 +29,23 @@ K_TIMER_DEFINE(motor_control_timer, motor_control_timer_handler, NULL);
 
 /* MOTION PLANNER */
 
-int MotionPlanner::interpolate() {
+int MotionPlanner::interpolate(int x_delta, int y_delta,
+                                float& theta_current,
+                                void (*output_fn)(const NavCommand&)) {
 
     // See docs/firmware/differential_drive_kinematics.md for derivation
 
-    int x_delta = current_instruction_.args[0].value;
-    int y_delta = current_instruction_.args[1].value;
-    
-    float r_delta = sqrtf((float)(x_delta * x_delta + y_delta * y_delta));
+    static int x_prev, y_prev;
 
-    float theta_prime = atan2f((float)y_delta, (float)x_delta);
-    float theta_delta = theta_prime - theta_current_;
+    float r_delta = sqrtf((float)((x_delta - x_prev) * (x_delta - x_prev) + (y_delta - y_prev) * (y_delta - y_prev)));
+
+    float theta_prime = atan2f((float)y_delta - y_prev, (float)x_delta - x_prev);
+    float theta_delta = theta_prime - theta_current;
+
+    #ifdef DEBUG_INTERPOLATE
+    printk("Moving theta_delta: %d, theta_prime %d, theta_prev %d, distance %d (x=%d, y=%d)\n", 
+           (int)RAD_TO_DEG(theta_delta), (int)RAD_TO_DEG(theta_prime), (int)RAD_TO_DEG(theta_current), (int)r_delta, x_delta, y_delta);
+    #endif /* DEBUG_INTERPOLATE */
 
     // normalize angle to (-pi, pi) range
     while (theta_delta > PI) {
@@ -50,27 +56,42 @@ int MotionPlanner::interpolate() {
     }
     
     // update current heading state
-    theta_current_ = theta_prime;
-    
+    theta_current = theta_prime;
+    x_prev = x_delta;
+    y_prev = y_delta;
+
     // turn
     if (fabsf(theta_delta) > 0.01f) {
         NavCommand turn_command = {0.0f, theta_delta};
-        k_msgq_put(nav_queue_, &turn_command, K_FOREVER);
+        output_fn(turn_command);
     }
     
     // forward movement
     if (r_delta > 0.01f) { 
         NavCommand move_command = {r_delta, 0.0f};
-        k_msgq_put(nav_queue_, &move_command, K_FOREVER);
+        output_fn(move_command);
     }
 
     return 0;
 }
 
-int MotionPlanner::discretize() {
+// Queue-based wrapper for production use
+int MotionPlanner::interpolate() {
 
-    NavCommand nav_command;
-    k_msgq_get(nav_queue_, &nav_command, K_FOREVER);
+    // See docs/firmware/differential_drive_kinematics.md for derivation
+
+    int x_delta = current_instruction_.args[0].value;
+    int y_delta = current_instruction_.args[1].value;
+
+    return interpolate(x_delta, y_delta, theta_current_,
+                      [](const NavCommand& cmd) {
+                          k_msgq_put(nav_queue_, &cmd, K_FOREVER);
+                      });
+}
+
+int MotionPlanner::discretize(const NavCommand& nav_command,
+                               uint8_t packet_id,
+                               void (*output_fn)(const StepCommand&)) {
 
     // See docs/firmware/differential_drive_kinematics.md for derivation
 
@@ -78,21 +99,21 @@ int MotionPlanner::discretize() {
     float d_left = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
     float d_right = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
 
+    #ifdef DEBUG_INTERPOLATE
+    printk("Discretize: d_left=%.2f mm, d_right=%.2f mm\n", (double)d_left, (double)d_right);
+    #endif /* DEBUG_INTERPOLATE */
+
     // step 3
     float v_left = d_left * STEPPER_CTRL_FREQ;   // mm/s
     float v_right = d_right * STEPPER_CTRL_FREQ; // mm/s
-    
-    StepCommand step_command;
 
     // rate limiting subsequent steps to prevent high velocity movement
     do {
         float current_v_left, current_v_right;
         
-        step_command.packet_id = current_instruction_.packet_id;
         if (fabsf(v_left) > MAX_LINEAR_VELOCITY) {
             if (v_left > 0) {
                 v_left -= MAX_LINEAR_VELOCITY;
-                step_command.left_velocity = (int16_t)STEPPER_MAX_VELOCITY;
                 current_v_left = MAX_LINEAR_VELOCITY;
 
             } else {
@@ -122,20 +143,33 @@ int MotionPlanner::discretize() {
         float omega_right_rad = current_v_right / WHEEL_RADIUS;
         
         // step 5
+        StepCommand step_command;
+        step_command.packet_id = packet_id;
         step_command.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
         step_command.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
         
-        k_msgq_put(step_queue_, &step_command, K_FOREVER);
+        output_fn(step_command);
 
-    } while (fabsf(v_left) > MAX_LINEAR_VELOCITY || fabsf(v_right) > MAX_LINEAR_VELOCITY);
+    } while (fabsf(v_left) > 0 || fabsf(v_right) > 0);
 
     return 0;
+}
+
+int MotionPlanner::discretize() {
+
+    NavCommand nav_command;
+    k_msgq_get(nav_queue_, &nav_command, K_FOREVER);
+
+    return discretize(nav_command, current_instruction_.packet_id, 
+                     [](const StepCommand& cmd) {
+                         k_msgq_put(step_queue_, &cmd, K_FOREVER);
+                     });
 }
 
 int MotionPlanner::consumeInstruction(const InstructionParser::GCodeCmd &current_instruction) {
     int ret;
     current_instruction_ = current_instruction;
-    current_packet_id = current_instruction.packet_id;  // Track the packet ID being processed
+    current_packet_id = current_instruction.packet_id;
 
     // turn gcode into motion commands
     ret = interpolate();
@@ -171,7 +205,7 @@ static void motor_control_work_handler(struct k_work *work) {
     // get step command
     StepCommand step_command;
     if (k_msgq_get(MotionPlanner::step_queue_, &step_command, K_NO_WAIT)) {
-        #ifdef DEBUG_NAV
+        #ifdef DEBUG_MOTION
         printk("No more step commands, stopping steppers\n");
         #endif
         MotionPlanner::stepper_left_.stop();
@@ -197,12 +231,9 @@ static void motor_control_work_handler(struct k_work *work) {
         return;
     }
 
-    // call stepper driver at specified velocity
-    #ifdef DEBUG_NAV
-    printk("Setting velocity\n");
+    #ifdef DEBUG_MOTION
     step_command.print();
     #endif
-
     MotionPlanner::stepper_left_.setVelocity(step_command.left_velocity);
     MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
 
@@ -287,6 +318,7 @@ void nav_thread(void *gcode_msgq_void, void *nav_cmd_msgq_void, void *step_cmd_m
         } else if (code == 'M' && num == 280) {
             if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 0) {
                 marker.consumeInstruction(current_instruction);
+                
                 
             } else if (current_instruction.args[0].letter == 'P' && current_instruction.args[0].value == 1) {
                 eraser.consumeInstruction(current_instruction);
