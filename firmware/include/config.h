@@ -7,7 +7,7 @@
 #define DEBUG_INTERPOLATE
 
 #define WHEEL_DIAMETER          (47.30)
-#define WHEELBASE               (125.0)
+#define WHEELBASE               (127.5)
 
 #define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
 
