@@ -25,7 +25,7 @@ class BLEPacketHandler:
         self.last_received_packet_id: Optional[int] = None
         self.last_received_message: Optional[str] = None
         self.client: Optional[BleakClient] = None
-        self.timeout: float = 10.0
+        self.timeout: float = 60.0  # Increased to 60 seconds for large movements
         
     def get_next_packet_id(self) -> int:
         """Generate sequential packet ID with automatic wraparound at 255."""
