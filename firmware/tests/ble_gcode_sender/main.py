@@ -15,21 +15,9 @@ DEVICE_NAME = "BOO"
 
 default_commands = [
     b"G1 X100 Y0\n",
-    b"G1 X100 Y100\n", 
-    b"G1 X0 Y100\n",
-    b"G1 X0 Y0\n",
-    b"G1 X100 Y0\n",
-    b"G1 X100 Y100\n", 
-    b"G1 X0 Y100\n",
-    b"G1 X0 Y0\n",
-    b"G1 X100 Y0\n",
-    b"G1 X100 Y100\n", 
-    b"G1 X0 Y100\n",
-    b"G1 X0 Y0\n",
-    b"G1 X100 Y0\n",
-    b"G1 X100 Y100\n", 
-    b"G1 X0 Y100\n",
-    b"G1 X0 Y0\n",
+    b"G1 X0 Y100\n", 
+    b"G1 X-100 Y0\n",
+    b"G1 X0 Y-100\n",
 ]
 
 def load_gcode_file(filename: str) -> List[bytes]:

@@ -37,9 +37,9 @@ int MotionPlanner::interpolate(int x_delta, int y_delta,
 
     static int x_prev, y_prev;
 
-    float r_delta = sqrtf((float)((x_delta - x_prev) * (x_delta - x_prev) + (y_delta - y_prev) * (y_delta - y_prev)));
+    float r_delta = sqrtf((float)((x_delta) * (x_delta) + (y_delta) * (y_delta)));
 
-    float theta_prime = atan2f((float)y_delta - y_prev, (float)x_delta - x_prev);
+    float theta_prime = atan2f((float)y_delta, (float)x_delta);
     float theta_delta = theta_prime - theta_current;
 
     #ifdef DEBUG_INTERPOLATE
