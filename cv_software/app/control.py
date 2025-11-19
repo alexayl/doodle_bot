@@ -170,9 +170,11 @@ class PathFollower:
     def _to_robot_frame(dx_board: float, dy_board: float, heading_rad: float) -> Tuple[float, float]:
         return board_to_robot(dx_board, dy_board, heading_rad)
 
-    def step(self, pose: Optional[Tuple[Tuple[float, float], float, float]]) -> Optional[Tuple[float, float]]:
+    def step(self, pose: Optional[Tuple[Tuple[float, float], float, float]], bounds: Optional[Tuple[float, float, float, float]] = None, margin: float = 0.0) -> Optional[Tuple[float, float]]:
         """
         pose: ((x_mm, y_mm), heading_rad, confidence)
+        bounds: (min_x, min_y, max_x, max_y) in mm, optional
+        margin: safety margin in mm to stay away from bounds edges
         returns: (forward_mm, left_mm) in ROBOT frame, or None when finished/not ready
         """
         if not self.active or not self._wps or pose is None:
@@ -198,12 +200,22 @@ class PathFollower:
 
         step_len = min(self.p.max_step_mm, dist)
         ux, uy = ex / dist, ey / dist
-        (_, heading, _) = pose
+        (x, y), heading, _ = pose
 
-        # Rotate to robot frame, then apply anisotropic caps
-        fwd, left = self._to_robot_frame(ux * step_len, uy * step_len, heading)
+        dx_board = ux * step_len
+        dy_board = uy * step_len
 
-        # anisotropic clamp (robot frame)
+        if bounds is not None:
+            min_x, min_y, max_x, max_y = bounds
+            next_x = x + dx_board
+            next_y = y + dy_board
+            next_x = max(min_x + margin, min(next_x, max_x - margin))
+            next_y = max(min_y + margin, min(next_y, max_y - margin))
+            dx_board = next_x - x
+            dy_board = next_y - y
+
+        fwd, left = self._to_robot_frame(dx_board, dy_board, heading)
+
         fwd = max(-self.p.max_step_forward_mm, min(self.p.max_step_forward_mm, fwd))
         left = max(-self.p.max_step_left_mm,   min(self.p.max_step_left_mm,   left))
 

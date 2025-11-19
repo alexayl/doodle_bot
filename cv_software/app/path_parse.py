@@ -19,7 +19,7 @@ def load_gcode_file(path: str) -> List[Tuple]:
     """
     text = _read_text(path)
     ops: List[Tuple] = []
-    inc_mode = False  # G91 on -> incremental; G90 -> absolute
+    inc_mode = None  # None=auto-detect, True=G91, False=G90
 
     for raw in text.splitlines():
         line = raw.split(";")[0].strip()
@@ -35,11 +35,19 @@ def load_gcode_file(path: str) -> List[Tuple]:
             inc_mode = False
             continue
 
+        # Pen commands: M3/M5 (legacy) or M280 (servo)
         if re.match(r"^M0?3\b", u):
             ops.append(("pen", True))   # pen down
             continue
         if re.match(r"^M0?5\b", u):
             ops.append(("pen", False))  # pen up
+            continue
+        # M280 P0 S0 = down, M280 P0 S90 = up
+        if u.startswith("M280"):
+            if "S0" in u or "S 0" in u:
+                ops.append(("pen", True))
+            elif "S90" in u or "S 90" in u:
+                ops.append(("pen", False))
             continue
 
         if not u.startswith(("G0", "G1")):
@@ -57,6 +65,10 @@ def load_gcode_file(path: str) -> List[Tuple]:
         dx = int(round(float(dx))) if dx is not None else 0
         dy = int(round(float(dy))) if dy is not None else 0
 
+        # Auto-detect: if no G90/G91 specified, assume relative (pathfinding default)
+        if inc_mode is None:
+            inc_mode = True
+            
         if inc_mode:
             if dx != 0 or dy != 0:
                 ops.append(("move", dx, dy))
@@ -103,10 +115,10 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
 
         # map legacy pen cmds
         if u.startswith("M3") or u == "M03":
-            out_lines.append("M280 P0 S0")
+            # out_lines.append("M280 P0 S0")
             continue
         if u.startswith("M5") or u == "M05":
-            out_lines.append("M280 P0 S90")
+            # out_lines.append("M280 P0 S90")
             continue
 
         # Track modality hints from source
@@ -119,7 +131,7 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
 
         # pass pen servo through
         if u.startswith("M280"):
-            out_lines.append(line)
+            # out_lines.append(line)
             continue
 
         # pass motion through
@@ -165,10 +177,10 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
         out_lines = rel_lines
 
     # Always enforce a single G91 at the top before any motion/pen commands
-    if out_lines:
-        has_g91 = any(l.upper().startswith("G91") for l in out_lines)
-        if not has_g91:
-            out_lines.insert(0, "G91")
+    # if out_lines:
+    #     has_g91 = any(l.upper().startswith("G91") for l in out_lines)
+    #     if not has_g91:
+    #         out_lines.insert(0, "G91")
 
     # Segment large relative moves into smaller chunks to ensure timely ACKs.
     # This applies whether the source was already relative or we converted it.
@@ -229,6 +241,7 @@ def scale_gcode_to_board(
     gcode_text: str,
     source_size_mm: Tuple[float, float],
     target_size_mm: Tuple[float, float],
+    preserve_aspect: bool = False,
 ) -> str:
     """
     Scale G-code coordinates from pathfinding canvas to actual detected board size.
@@ -253,6 +266,11 @@ def scale_gcode_to_board(
     
     scale_x = target_size_mm[0] / source_size_mm[0]
     scale_y = target_size_mm[1] / source_size_mm[1]
+    if bool(preserve_aspect):
+        # Uniform scale; relative moves stay relative so centering offset is irrelevant here
+        s = min(scale_x, scale_y)
+        scale_x = s
+        scale_y = s
     
     lines = []
     for raw_line in gcode_text.splitlines():
