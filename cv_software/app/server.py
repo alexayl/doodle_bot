@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import cv2
-import numpy as np
 from flask import Flask, Response, request, render_template, redirect, url_for
 from werkzeug.utils import secure_filename
 import faulthandler
@@ -67,7 +66,12 @@ def get_cam() -> Optional[ThreadedCamera]:
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
 bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
-AXIS_MAP = {"J": None, "Ji": None, "probe_mm": 10.0}
+
+# Default orientation derived from board marker layout:
+# - board X increases to the right (matches firmware)
+# - board Y increases toward the physical top marker, while firmware Y increases downward.
+# Axis signs auto-adjust in-flight if CV sees the robot responding opposite of the command.
+AXIS_SIGN = {"X": 1, "Y": -1}
 @contextmanager
 def _in_dir(path: str):
     old = os.getcwd()
@@ -90,188 +94,155 @@ def _as_waypoints(seq) -> List[Waypoint]:
     return out
 
 # -----------------------------------------------------------------------------#
-# Simple axis mapping (robot steps -> board mm) using CV probes
+# Board delta → firmware steps (auto sign adjustment)
 # -----------------------------------------------------------------------------#
-def _compute_axis_mapping(probe_mm: float = 10.0, settle_s: float = 0.25, max_retries: int = 2) -> bool:
-    """Probe +X and +Y robot steps and measure board mm deltas via CV.
-    Builds 2x2 Jacobian J (robot->board) and its inverse Ji (board->robot).
-    Returns True on success.
+
+def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Optional[Tuple[int, int]]:
+    """Convert a small board delta (mm) into firmware step commands.
+
+    Board coordinates:
+      +X to the right
+      +Y toward the physical top marker
+
+    Firmware coordinates:
+      +X to the right
+      +Y downward
+
+    AXIS_SIGN tracks any motor reversals relative to this convention.
     """
-    global AXIS_MAP
-    bounds = cvp.get_board_bounds_mm()
-    if bounds is None:
-        print("AXIS_MAP: No board bounds available")
-        return False
-
-    pose0 = cvp.get_pose_mm()
-    if not pose0:
-        print("AXIS_MAP: No initial pose available")
-        return False
-    
-    # Check if we're in safe zone to probe (not too close to actual marker edges)
-    min_x, min_y, max_x, max_y = bounds
-    width_mm = max_x - min_x
-    height_mm = max_y - min_y
-    margin = max(15.0, 0.08 * min(width_mm, height_mm))
-    cx, cy = pose0[0]
-    if cx < min_x + margin or cx > max_x - margin or cy < min_y + margin or cy > max_y - margin:
-        print(f"AXIS_MAP: Skipping probe, too close to edge ({cx:.1f}, {cy:.1f})")
-        return False
-
-    # Ensure pen up
-    # try:
-    #     bt.send_gcode_windowed("M280 P0 S90\n", window_size=1)
-    #     time.sleep(0.2)
-    # except Exception:
-    #     pass
-
-    # Retry loop with increasing settle times
-    for attempt in range(max_retries + 1):
-        current_settle = settle_s * (1 + attempt)  # 0.25s, 0.5s, 0.75s
-        
-        def _delta_after(cmd: str) -> Optional[Tuple[float, float]]:
-            bt.send_gcode_windowed(cmd + "\n", window_size=1)
-            time.sleep(current_settle)
-            pose = cvp.get_pose_mm()
-            return None if not pose else (pose[0][0], pose[0][1])
-
-        # Measure X+
-        p_before = cvp.get_pose_mm()
-        if not p_before:
-            continue
-        x1 = _delta_after(f"G1 X{int(round(probe_mm))}")
-        if x1 is None:
-            continue
-        # Return X-
-        _ = _delta_after(f"G1 X{-int(round(probe_mm))}")
-        if _ is None:
-            continue
-
-        # Measure Y+
-        p_before2 = cvp.get_pose_mm()
-        if not p_before2:
-            continue
-        y1 = _delta_after(f"G1 Y{int(round(probe_mm))}")
-        if y1 is None:
-            continue
-        # Return Y-
-        _ = _delta_after(f"G1 Y{-int(round(probe_mm))}")
-        if _ is None:
-            continue
-
-        (cx0, cy0) = (p_before[0][0], p_before[0][1])
-        (cx1, cy1) = x1
-        (cx2, cy2) = (p_before2[0][0], p_before2[0][1])
-        y1_pos = y1
-        (cx2_after, cy2_after) = y1_pos
-        
-        # Verify robot actually moved (CV detected movement > 1mm)
-        x_delta_mag = math.sqrt((cx1 - cx0)**2 + (cy1 - cy0)**2)
-        y_delta_mag = math.sqrt((cx2_after - cx2)**2 + (cy2_after - cy2)**2)
-        
-        print(f"AXIS_MAP: Attempt {attempt + 1}/{max_retries + 1} (settle={current_settle:.2f}s):")
-        print(f"  +X probe: sent {probe_mm:.1f}mm, measured ({cx1-cx0:.2f}, {cy1-cy0:.2f})mm delta (mag={x_delta_mag:.2f}mm)")
-        print(f"  +Y probe: sent {probe_mm:.1f}mm, measured ({cx2_after-cx2:.2f}, {cy2_after-cy2:.2f})mm delta (mag={y_delta_mag:.2f}mm)")
-        
-        # Sanity check: measured deltas shouldn't be >3x commanded (indicates CV tracking error)
-        max_reasonable_delta = probe_mm * 3.0
-        if x_delta_mag > max_reasonable_delta or y_delta_mag > max_reasonable_delta:
-            print(f"AXIS_MAP: Measured delta exceeds {max_reasonable_delta:.1f}mm - likely CV tracking error")
-            if attempt < max_retries:
-                print(f"AXIS_MAP: Retrying...")
-                continue
-            else:
-                print("AXIS_MAP: All attempts show unreasonable deltas - aborting")
-                return False
-        
-        # If CV detected reasonable movement, break retry loop
-        if x_delta_mag > 1.0 and y_delta_mag > 1.0:
-            print(f"AXIS_MAP: Movement detected, proceeding with calibration")
-            break
-        else:
-            print(f"AXIS_MAP: Insufficient movement detected (X={x_delta_mag:.2f}mm, Y={y_delta_mag:.2f}mm)")
-            if attempt < max_retries:
-                print(f"AXIS_MAP: Retrying with longer settle time...")
-    else:
-        print("AXIS_MAP: All probe attempts failed - CV not tracking movement reliably")
-        return False
-    
-    # Use final successful probe results
-    (cx0, cy0) = (p_before[0][0], p_before[0][1])
-    (cx1, cy1) = x1
-    (cx2, cy2) = (p_before2[0][0], p_before2[0][1])
-    (cx2_after, cy2_after) = y1_pos
-
-    dx_x = (cx1 - cx0) / max(1e-6, probe_mm)
-    dy_x = (cy1 - cy0) / max(1e-6, probe_mm)
-    dx_y = (cx2_after - cx2) / max(1e-6, probe_mm)
-    dy_y = (cy2_after - cy2) / max(1e-6, probe_mm)
-
-    J = np.array([[dx_x, dx_y], [dy_x, dy_y]], dtype=float)
-    
-    # Safety checks for near-singular or ill-conditioned Jacobian
-    det_J = np.linalg.det(J)
-    if abs(det_J) < 1e-6:
-        print(f"AXIS_MAP: Rejected - determinant too small ({det_J:.2e}), matrix is near-singular")
-        return False
-    
-    cond_J = np.linalg.cond(J)
-    if cond_J > 1e3:
-        print(f"AXIS_MAP: Rejected - condition number too high ({cond_J:.1f}), matrix is ill-conditioned")
-        return False
-    
-    try:
-        Ji = np.linalg.inv(J)
-    except Exception as e:
-        print(f"AXIS_MAP: Failed to invert J: {e}")
-        return False
-    
-    # Sanity check: Ji values shouldn't be absurdly large (indicates bad calibration)
-    if np.max(np.abs(Ji)) > 500:
-        print(f"AXIS_MAP: Rejected - Ji has extreme values (max={np.max(np.abs(Ji)):.1f}), likely bad probe data")
-        return False
-
-    AXIS_MAP["J"] = J
-    AXIS_MAP["Ji"] = Ji
-    AXIS_MAP["probe_mm"] = float(probe_mm)
-    print(f"AXIS_MAP: J={J}, Ji={Ji}")
-    print(f"AXIS_MAP: det={det_J:.4f}, cond={cond_J:.1f} - ACCEPTED")
-    return True
-
-def _map_board_to_robot_steps(bx: float, by: float, max_seg: int, min_step: int) -> Optional[Tuple[int, int]]:
-    """Use Ji to convert desired board delta (mm) into robot step ints with clamping.
-    ENSURES result won't violate actual marker bounds by checking current position + desired delta.
-    """
-    Ji = AXIS_MAP.get("Ji")
-    if Ji is None:
-        return None
-    
-    # Verify this delta won't exceed actual marker bounds
     pose = cvp.get_pose_mm()
     bounds = cvp.get_board_bounds_mm()
+
     if pose and bounds:
-        cx, cy = pose[0]
+        (cx, cy), _, _ = pose
         min_x, min_y, max_x, max_y = bounds
-        # Use configured margins
-        width_mm = max_x - min_x
-        height_mm = max_y - min_y
-        margin = max(CV_BOARD_MARGIN_MM, CV_BOARD_MARGIN_FRAC * min(width_mm, height_mm))
-        
-        # Clamp delta to stay within actual marker bounds
-        next_x = cx + bx
-        next_y = cy + by
-        bx = max((min_x + margin) - cx, min(bx, (max_x - margin) - cx))
-        by = max((min_y + margin) - cy, min(by, (max_y - margin) - cy))
-    
-    rr = Ji.dot(np.array([float(bx), float(by)], dtype=float))
-    rx, ry = float(rr[0]), float(rr[1])
-    sx_mag = max(min_step, min(max_seg, int(round(abs(rx)))))
-    sy_mag = max(min_step, min(max_seg, int(round(abs(ry)))))
-    sx = sx_mag if rx >= 0 else -sx_mag
-    sy = sy_mag if ry >= 0 else -sy_mag
+        final_x = cx + bx
+        final_y = cy + by
+
+        if final_x < min_x or final_x > max_x or final_y < min_y or final_y > max_y:
+            print(
+                f"AXIS SAFETY: Rejected move by ({bx:.1f},{by:.1f})mm "
+                f"from ({cx:.1f},{cy:.1f}) to ({final_x:.1f},{final_y:.1f}) "
+                f"outside bounds [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]"
+            )
+            return None
+    else:
+        # If we do not know bounds or pose, still allow mapping but log it
+        print("AXIS WARNING: No pose or bounds available in _map_board_to_robot_steps")
+
+    def _quantize(val: float) -> int:
+        if abs(val) < 1e-3:
+            return 0
+        mag = max(min_step, int(round(abs(val))))
+        return mag if val >= 0 else -mag
+
+    # Map board frame to firmware frame using current sign guess
+    cmd_x = AXIS_SIGN["X"] * float(bx)
+    cmd_y = AXIS_SIGN["Y"] * float(by)
+    sx = _quantize(cmd_x)
+    sy = _quantize(cmd_y)
+
+    print(
+        f"STEP MAP: board_delta=({bx:.1f},{by:.1f}) "
+        f"axis_sign=(X{AXIS_SIGN['X']:+d},Y{AXIS_SIGN['Y']:+d}) "
+        f"cmd=(X{cmd_x:.1f},Y{cmd_y:.1f}) steps=(X{sx},Y{sy})"
+    )
+
     if sx == 0 and sy == 0:
         return None
     return sx, sy
+
+
+
+def _refresh_pose_from_cam(cam: Optional[ThreadedCamera]) -> Optional[tuple]:
+    """Single CV update from the camera feed, returning the latest pose."""
+    if cam is not None:
+        frame = cam.get_latest_good()
+        if frame is not None:
+            try:
+                cvp.update_bot(frame)
+            except Exception:
+                pass
+    return cvp.get_pose_mm()
+
+
+def _wait_for_pose(timeout_s: float) -> Optional[tuple]:
+    """Wait until a pose is detected or timeout expires."""
+    deadline = time.time() + max(0.2, timeout_s)
+    cam = get_cam()
+    while time.time() < deadline:
+        pose = _refresh_pose_from_cam(cam)
+        if pose:
+            return pose
+        time.sleep(0.05)
+    return None
+def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
+    """
+    Detect firmware axis direction for +X and +Y.
+    Performs small test moves, confirms physical movement via CV,
+    and sets AXIS_SIGN based on real movement.
+    """
+
+    print("AXIS DETECT: Starting axis detection")
+
+    # Must have a valid pose first
+    pose = _wait_for_pose(5.0)
+    if not pose:
+        print("AXIS DETECT FAIL: No pose available.")
+        return False
+
+    (x0, y0), _, _ = pose
+
+    # ------------------ Detect X sign ------------------
+    print("AXIS DETECT: probing +X ...")
+    bt.send_gcode_windowed(f"G1 X{int(move_mm)} Y0\n", 1)
+    p2 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
+
+    if not p2:
+        print("AXIS DETECT WARNING: No movement detected on +X probe. Assuming +X is forward.")
+        AXIS_SIGN["X"] = +1
+    else:
+        (x1, y1), _, _ = p2
+        if x1 > x0:
+            AXIS_SIGN["X"] = +1
+            print("AXIS DETECT: +X increases X → AXIS_SIGN[X] = +1")
+        else:
+            AXIS_SIGN["X"] = -1
+            print("AXIS DETECT: +X decreases X → AXIS_SIGN[X] = -1")
+
+    # Move back to original X
+    bt.send_gcode_windowed(f"G1 X{-AXIS_SIGN['X'] * int(move_mm)} Y0\n", 1)
+    _wait_for_pose_change((x1 if p2 else x0, y1 if p2 else y0), min_mm=1.0, timeout_s=timeout_s)
+
+    # ------------------ Detect Y sign ------------------
+    pose = _wait_for_pose(2.0)
+    if not pose:
+        print("AXIS DETECT FAIL: Lost pose before Y probe.")
+        return False
+    (x0, y0), _, _ = pose
+
+    print("AXIS DETECT: probing +Y ...")
+    bt.send_gcode_windowed(f"G1 X0 Y{int(move_mm)}\n", 1)
+    p3 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
+
+    if not p3:
+        print("AXIS DETECT WARNING: No movement detected on +Y probe. Assuming +Y is forward.")
+        AXIS_SIGN["Y"] = +1
+    else:
+        (x2, y2), _, _ = p3
+        if y2 > y0:
+            AXIS_SIGN["Y"] = +1
+            print("AXIS DETECT: +Y increases Y → AXIS_SIGN[Y] = +1")
+        else:
+            AXIS_SIGN["Y"] = -1
+            print("AXIS DETECT: +Y decreases Y → AXIS_SIGN[Y] = -1")
+
+    # Move back to original Y
+    bt.send_gcode_windowed(f"G1 X0 Y{-AXIS_SIGN['Y'] * int(move_mm)}\n", 1)
+    _wait_for_pose_change((x2 if p3 else x0, y2 if p3 else y0), min_mm=1.0, timeout_s=timeout_s)
+
+    print(f"AXIS DETECT COMPLETE: AXIS_SIGN = {AXIS_SIGN}")
+    return True
 
 # -----------------------------------------------------------------------------#
 # G-code helpers
@@ -320,190 +291,106 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
         return []
     return _ops_to_normalized_wps(ops)
 
-def _home_bot(starting_node_inset_p: float = 0.05, timeout_sec: float = 15.0) -> bool:
+def _home_bot(
+    inset_mm: float = 20.0,
+    step_coarse: float = 35.0,
+    step_fine: float = 12.0,
+    arrival_mm: float = 15.0,
+    timeout_s: float = 45.0,
+) -> bool:
     """
-    SIMPLIFIED: Move bot toward top-left corner with safety margin.
-    Takes several steps to get close, uses CV feedback for positioning.
-    
-    Returns True if completed movement steps, False on error.
+    Simple, bounded homing toward top-left corner.
+    Uses board-frame deltas only.
+    NO probes, NO heading, NO sign guessing.
+    All moves are safety-checked through _map_board_to_robot_steps().
     """
-    bounds = cvp.get_board_bounds_mm()
-    if not bounds:
-        print("HOMING FAILED: Board not calibrated")
-        return False
-    
-    min_x, min_y, max_x, max_y = bounds
-    width_mm = max_x - min_x
-    height_mm = max_y - min_y
-    
-    margin = max(CV_BOARD_MARGIN_MM, CV_BOARD_MARGIN_FRAC * min(width_mm, height_mm))
-    bp = getattr(cvp.cal, 'board_pose', None)
-    target_x = min_x + margin + width_mm * starting_node_inset_p
-    target_y = min_y + margin + height_mm * starting_node_inset_p
-    # Clamp to safe zone
-    target_x = max(min_x + margin, min(target_x, max_x - margin))
-    target_y = max(min_y + margin, min(target_y, max_y - margin))
 
-    print(f"HOMING: Target ({target_x:.1f}, {target_y:.1f})mm with {margin:.1f}mm margin (matches pathfinding start)")
-    
+    st = cvp.get_state()
+    if not st["calibrated"]:
+        print("HOME FAIL: Board not calibrated")
+        return False
+
+    min_x, min_y, max_x, max_y = cvp.get_board_bounds_mm()
+    tx = min_x + inset_mm
+    ty = max_y - inset_mm
+    print(f"HOME: TL target = ({tx:.1f},{ty:.1f})mm")
+
     pose = cvp.get_pose_mm()
     if not pose:
-        print("HOMING: No bot pose, sending blind move to top-left")
-        # Blind homing: just move up-left with conservative steps
-        target_x = min_x + margin + width_mm * starting_node_inset_p
-        target_y = min_y + margin + height_mm * starting_node_inset_p
-        bp = getattr(cvp.cal, 'board_pose', None)
-        # Removed pixel-space TL corner fallback (mm_per_px dependency); bounds already supply mm coordinates
-        print("HOMING: No bot pose, sending blind move to top-left")
-        # Blind homing: just move up-left with conservative steps
-        # bt.send_gcode_windowed("M280 P0 S90\n", window_size=1)  # Pen up
-        bt.send_gcode_windowed("G1 X-40\nG1 Y-40\n", window_size=1)
-        time.sleep(1.0)
-        return True
-    
-    (current_x, current_y), heading, conf = pose
-    dx_board = target_x - current_x
-    dy_board = target_y - current_y
-    
-    print(f"HOMING: From ({current_x:.1f},{current_y:.1f}), need to move ({dx_board:.1f},{dy_board:.1f})mm")
-    
-    # Pen up
-    # bt.send_gcode_windowed("M280 P0 S90\n", window_size=1)
-    time.sleep(0.2)
-    
-    # Helper to force fresh CV update
-    def get_fresh_pose():
-        cam = get_cam()
-        if cam:
-            for _ in range(5):  # Try up to 5 frames to get valid pose
-                frame = cam.get_latest_good()
-                if frame is not None:
-                    cvp.update_bot(frame)
-                    pose = cvp.get_pose_mm()
-                    if pose:
-                        return pose
-                time.sleep(0.05)
-        return cvp.get_pose_mm()  # Fallback to cached
-    
-    # Iterate toward target with adaptive steps and pose waits
-    max_steps = 20
-    step_size_cap_mm = 60.0
-    position_threshold = 15.0  # Consider arrived when within 15mm
-    
-    # Build axis mapping (robot -> board) once if not already available.
-    if AXIS_MAP.get("J") is None or AXIS_MAP.get("Ji") is None:
-        print("HOMING: Axis mapping not present; probing axes")
-        if not _compute_axis_mapping(probe_mm=15.0, settle_s=0.30, max_retries=1):
-            print("HOMING WARNING: Axis mapping failed; will fall back to naive heading rotation")
-    use_axis_map = AXIS_MAP.get("Ji") is not None
+        pose = _wait_for_pose(10)
+    if not pose:
+        print("HOME FAIL: No initial pose")
+        return False
+    if not _detect_axis_signs():
+        print("HOME FAIL: Could not detect axis directions.")
+        return False
+    (cx, cy), _, _ = pose
+    print(f"HOME: Start pose=({cx:.1f},{cy:.1f})")
 
-    for i in range(max_steps):
-        # Re-check position BEFORE move with FRESH CV update
-        pose_before = get_fresh_pose()
-        if not pose_before:
-            print(f"HOMING: Lost pose tracking after {i} steps")
-            break
-        (cx, cy), heading, _ = pose_before
-        
-        # Calculate remaining distance in board frame
-        remaining_x = target_x - cx
-        remaining_y = target_y - cy
-        distance = math.sqrt(remaining_x**2 + remaining_y**2)
-        
-        # Close enough? Stop early
-        if distance < position_threshold:
-            print(f"HOMING: Reached target ({distance:.1f}mm away) after {i+1} steps")
-            return True
-        
-        # Adaptive step size (larger when far)
-        step_size_mm = min(step_size_cap_mm, max(20.0, 0.4 * distance))
+    # ---- MAIN LOOP ----
+    t0 = time.time()
+    stuck = 0
+    max_stuck = 4
 
-        # Clamp next position to safe board margins
-        nx = cx + remaining_x
-        ny = cy + remaining_y
-        nx = max(min_x + margin, min(nx, max_x - margin))
-        ny = max(min_y + margin, min(ny, max_y - margin))
+    while time.time() - t0 < timeout_s:
 
-        step_x_board = nx - cx
-        step_y_board = ny - cy
-        step_len = math.hypot(step_x_board, step_y_board)
-        if step_len > step_size_mm and step_len > 1e-6:
-            scale = step_size_mm / step_len
-            step_x_board *= scale
-            step_y_board *= scale
+        pose = cvp.get_pose_mm()
+        if not pose:
+            print("HOME: pose lost, waiting…")
+            time.sleep(0.05)
+            continue
 
-        if use_axis_map:
-            mapped = _map_board_to_robot_steps(step_x_board, step_y_board, max_seg=55, min_step=1)
-            if mapped is None:
-                print("HOMING: Axis map produced no movement; forcing 1mm diagonal toward target")
-                sx = -1 if remaining_x < 0 else 1
-                sy = -1 if remaining_y < 0 else 1
-            else:
-                sx, sy = mapped
-        else:
-            # Fallback: approximate rotation by heading (legacy path)
-            cos_t = math.cos(heading)
-            sin_t = math.sin(heading)
-            step_x_robot = step_x_board * cos_t + step_y_board * sin_t
-            step_y_robot = -step_x_board * sin_t + step_y_board * cos_t
-            sx = int(round(step_x_robot))
-            sy = int(round(step_y_robot))
-
-        # Avoid zero-length commands
-        if sx == 0 and sy == 0:
-            # Nudge along dominant axis by 1mm to keep progress
-            if abs(step_x_robot) >= abs(step_y_robot):
-                sx = 1 if step_x_robot >= 0 else -1
-            else:
-                sy = 1 if step_y_robot >= 0 else -1
-
-        print(f"HOMING[{i+1}/{max_steps}]: dist={distance:.1f}mm, board_step=({step_x_board:.1f},{step_y_board:.1f}), robot_mm=({sx},{sy}), axis_map={'ON' if use_axis_map else 'OFF'} heading={math.degrees(heading):.1f}°")
-
-        # Send robot-frame move in mm
-        cmd = f"G1 X{sx} Y{sy}\n"
-        bt.send_gcode_windowed(cmd, window_size=1)
-        
-        # Wait for movement to complete with fresh pose
-        pose_after = _wait_for_pose_change(prev_xy=(cx, cy), min_mm=2.0, timeout_s=2.0)
-        if pose_after:
-            (cx_after, cy_after), _, _ = pose_after
-            actual_movement = math.sqrt((cx_after - cx)**2 + (cy_after - cy)**2)
-            # Bounds safety: if new position is outside safe zone, immediately reverse and shrink next steps.
-            out_of_bounds = not (min_x + margin <= cx_after <= max_x - margin and min_y + margin <= cy_after <= max_y - margin)
-            if out_of_bounds:
-                print(f"HOMING SAFETY: Pose ({cx_after:.1f},{cy_after:.1f}) outside safe zone; reversing last move")
-                bt.send_gcode_windowed(f"G1 X{-sx} Y{-sy}\n", window_size=1)
-                # Reduce cap aggressively to prevent future excursions
-                step_size_cap_mm = max(15.0, step_size_cap_mm * 0.5)
-            elif actual_movement < 1.0:
-                print(f"HOMING WARNING: CV shows minimal movement ({actual_movement:.1f}mm) - may need longer settle time")
-            else:
-                new_remaining = math.sqrt((target_x - cx_after)**2 + (target_y - cy_after)**2)
-                print(f"HOMING: CV detected {actual_movement:.1f}mm movement (remaining {new_remaining:.1f}mm)")
-                # If movement unexpectedly large (>2x planned board step length) shrink future steps
-                planned_len = math.hypot(step_x_board, step_y_board)
-                if actual_movement > planned_len * 2.0:
-                    step_size_cap_mm = max(20.0, step_size_cap_mm * 0.7)
-                    print(f"HOMING ADJUST: Large actual movement vs planned ({actual_movement:.1f}>{planned_len*2.0:.1f}); reducing step cap to {step_size_cap_mm:.1f}mm")
-    
-    # Final position check
-    pose = cvp.get_pose_mm()
-    if pose:
         (cx, cy), _, _ = pose
-        final_dist = math.sqrt((target_x - cx)**2 + (target_y - cy)**2)
-        # If distance accidentally increased a lot, attempt Y sign inversion next iteration
-        if pose_after:
-            new_remaining = math.sqrt((target_x - cx_after)**2 + (target_y - cy_after)**2)
-            print(f"HOMING: CV detected {actual_movement:.1f}mm movement (remaining {new_remaining:.1f}mm)")
-            if new_remaining > distance * 1.10:
-                # Invert next Y board component heuristic by nudging target slightly
-                target_y = max(min_y + margin, min(target_y - 5.0, max_y - margin))
-                print("HOMING ADJUST: Large distance increase detected, nudging target_y upward 5mm to reinforce top-left approach")
-        print(f"HOMING: Completed {max_steps} steps, final distance: {final_dist:.1f}mm")
-    else:
-        print(f"HOMING: Completed {max_steps} steps toward top-left")
-    
-    return True
+
+        dx = tx - cx
+        dy = ty - cy
+        dist = math.hypot(dx, dy)
+        print(f"HOME: pos=({cx:.1f},{cy:.1f}) dist={dist:.1f}")
+
+        if dist < arrival_mm:
+            print("HOME ✓ reached TL target")
+            return True
+
+        # Step size
+        step = step_coarse if dist > 120 else step_fine
+        step = max(6, min(step, dist * 0.45))
+
+        # Board-frame direction (unit)
+        norm = math.hypot(dx, dy)
+        ux = dx / norm
+        uy = dy / norm
+
+        # Desired small board-frame move
+        bx = ux * step
+        by = uy * step
+
+        # Convert via SAFE MAPPER
+        steps = _map_board_to_robot_steps(bx, by)
+        if steps is None:
+            print("HOME: Step rejected by safety map (would exit board). Stopping.")
+            return True
+
+        sx, sy = steps
+        cmd = f"G1 X{sx} Y{sy}\n"
+        print(f"HOME → {cmd.strip()}")
+        bt.send_gcode_windowed(cmd, 1)
+
+        # Confirm movement
+        before = (cx, cy)
+        p2 = _wait_for_pose_change(before, 1.5, 3.5)
+        if not p2:
+            stuck += 1
+            print(f"HOME WARN: stuck {stuck}/{max_stuck}")
+            if stuck >= max_stuck:
+                print("HOME FAIL: robot not moving")
+                return False
+        else:
+            print("HOME: movement confirmed")
+            stuck = 0
+
+    print("HOME FAIL: timeout")
+    return False
+
 
 def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], window_size: int = 5):
     """Send G-code with real-time CV correction using centralized PathCorrectionEngine."""
@@ -820,12 +707,10 @@ def draw():
             raw_norm = fallback
 
         if raw_norm:
-            # Removed mm_per_px dependency: assume board scale already established via central calibration
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
             else:
-                # Home the bot to starting position first
                 if not _home_bot():
                     error = "Failed to home bot to starting position"
                 else:
@@ -834,10 +719,7 @@ def draw():
                         src_for_gcode = gcode_path if gcode_path else "draw"
                         gcode_str = _read_gcode_text(src_for_gcode)
                     
-                    # Normalize and scale to firmware G-code using current calibration
-                        firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                    
-                    # Send with CV correction enabled
+                        firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)                    
                         _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
                     except Exception as e:
                         error = f"Failed to send G-code: {e}"
@@ -865,8 +747,9 @@ def stream():
 
 @app.route("/home", methods=["POST"]) 
 def home_robot():
+    print("HOME: Requested homing sequence")
     _ensure_cv_thread()
-    
+    print("HOME: Ensuring board is calibrated...")
     # Wait for calibration AND scale to be ready (up to 20 seconds for robot markers)
     timeout = 20.0
     start_time = time.time()
@@ -933,7 +816,6 @@ def test_send():
             if line.strip():
                 print(f"  {i}: {line}")
         
-        # Send with strict sequencing to avoid MCU aggregating vectors
         bt.send_gcode_windowed(normalized, window_size=1)
         
         return {"success": True, "lines_sent": len([l for l in normalized.split('\n') if l.strip()])}

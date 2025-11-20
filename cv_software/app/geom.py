@@ -7,8 +7,7 @@ def fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin
         return []
     Wmm, Hmm = board_mm
     
-    # Input waypoints are normalized [0,1]
-    # Find bounding box in normalized space
+
     xs = [w.x_mm for w in wps]
     ys = [w.y_mm for w in wps]
     minx = min(xs)
@@ -16,11 +15,9 @@ def fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin
     miny = min(ys)
     maxy = max(ys)
     
-    # Compute normalized dimensions
     w_norm = max(maxx - minx, 1e-6)
     h_norm = max(maxy - miny, 1e-6)
     
-    # Scale to fit board with margin, preserving aspect ratio
     target_w = (1.0 - 2 * margin_frac) * Wmm
     target_h = (1.0 - 2 * margin_frac) * Hmm
     scale = min(target_w / w_norm, target_h / h_norm)
@@ -29,7 +26,6 @@ def fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin
     cx_norm = 0.5 * (minx + maxx)
     cy_norm = 0.5 * (miny + maxy)
     
-    # Center of board in mm
     cx_board = 0.5 * Wmm
     cy_board = 0.5 * Hmm
     

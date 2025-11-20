@@ -22,7 +22,7 @@ RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write (NUS RX)
 TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Notify (NUS TX)
 
 # Target device
-DEVICE_NAME = os.getenv("BT_DEVICE_NAME", "DOO").strip()
+DEVICE_NAME = os.getenv("BT_DEVICE_NAME", "BOO").strip()
 DEVICE_ADDR = os.getenv("BT_DEVICE_ADDR", "").strip()  # optional MAC/UUID hint
 
 # Tuning
