@@ -27,12 +27,30 @@ def encode_jpeg(frame: np.ndarray, quality: int = 65) -> bytes | None:
             pass
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return buf.tobytes() if ok else None
-def board_to_robot(dx_board: float, dy_board: float, heading_rad: float) -> Tuple[float, float]:
+
+def board_to_robot(dx_board: float, dy_board: float, heading_rad: float) -> tuple[float, float]:
+    """Rotate a board-frame delta (dx, dy) into robot forward/left components.
+
+    Board coordinate frame (post-homography):
+    - Origin: bottom-left of physical board (after Y inversion in homography)
+    - +X: rightward
+    - +Y: upward (toward physical top). This is the inverse of the pathfinding canvas
+        where Y increases downward; the homography mapping flipped Y so that math/firmware
+        use a conventional Cartesian orientation for motion planning.
+
+    Robot frame:
+    - forward: along current heading direction
+    - left: perpendicular to heading (positive to robot's left side)
+
+    Uses negative heading in rotation for an equivalent formulation to
+    cv_core.correct_delta_mm (sign convention differs but result matches).
+    """
     c = math.cos(-heading_rad)
     s = math.sin(-heading_rad)
     fwd = c * dx_board - s * dy_board
     lef = -(s * dx_board + c * dy_board)
     return float(fwd), float(lef)
+
 # ---- Metrics ----
 class Metrics:
     """Class to track and compute metrics related to processing frames."""

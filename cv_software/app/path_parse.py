@@ -267,7 +267,6 @@ def scale_gcode_to_board(
     scale_x = target_size_mm[0] / source_size_mm[0]
     scale_y = target_size_mm[1] / source_size_mm[1]
     if bool(preserve_aspect):
-        # Uniform scale; relative moves stay relative so centering offset is irrelevant here
         s = min(scale_x, scale_y)
         scale_x = s
         scale_y = s
@@ -282,11 +281,9 @@ def scale_gcode_to_board(
         
         # Scale G0/G1 commands only
         if line_upper.startswith(("G0 ", "G1 ", "G0\t", "G1\t", "G0", "G1")):
-            # Preserve the command (G0/G1) exactly as written at the start
             m_cmd = re.match(r"^(G0|G1)\b", line, flags=re.IGNORECASE)
             cmd = m_cmd.group(1).upper() if m_cmd else line[:2].upper()
 
-            # Extract X and Y values using the robust numeric regex
             x_match = re.search(r"\bX\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
             y_match = re.search(r"\bY\s*(" + _NUM_RE + r")\b", line, flags=re.IGNORECASE)
 
