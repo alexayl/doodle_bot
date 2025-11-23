@@ -191,20 +191,16 @@ class PathFollower:
 
         (x, y), heading, conf = pose
 
-        # Advance through already-reached waypoints
         self._advance_if_reached(x, y)
         if self._i >= len(self._wps):
             self.stop()
             return True, 0.0
 
-        # Compute lateral deviation
         raw_dev = self._lateral_deviation(x, y, self._i)
 
-        # Smooth deviation
         a = self._deviation_alpha
         self._smooth_deviation = a * self._smooth_deviation + (1.0 - a) * raw_dev
 
-        # Reached check
         tgt = self._wps[self._i]
         dist_to_wp = math.hypot(tgt.x_mm - x, tgt.y_mm - y)
 
