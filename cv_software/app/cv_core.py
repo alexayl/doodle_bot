@@ -1,66 +1,91 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Callable
 import numpy as np
 import cv2
 import math
 import time
 from app.utils import board_to_robot
-from app.geom import fit_path_to_board as _fit_to_board
 import os
 from app.path_parse import (
     load_gcode_file,
-    convert_pathfinding_gcode,
     scale_gcode_to_board,
 )
-_POSE_ALPHA = 0.25  #  factor for updating the pose estimate
-_SCALE_ALPHA = 0.15  #  factor for updating the scale estimate
-_CONF_MIN_BOARD = 0.60  # min confidence threshold for board detection
-_CONF_MIN_BOT = 0.60  # min confidence threshold for bot detection
+
+BOARD_MARGIN_MM = float(os.getenv("BOARD_MARGIN_MM", "67"))
+BOARD_MARGIN_FRAC = float(os.getenv("BOARD_MARGIN_FRAC", "0.20"))
+_POSE_ALPHA = 0.7
+_SCALE_ALPHA = 0.15
+_CONF_MIN_BOARD = 0.60
+_CONF_MIN_BOT = 0.30
+
+
+CV_CORRECTION_RATE_HZ = float(os.getenv("CV_CORRECTION_RATE_HZ", "7.0"))
+CV_MIN_ERROR_MM = float(os.getenv("CV_MIN_ERROR_MM", "2.5"))
+CV_LOOKAHEAD_COUNT = int(os.getenv("CV_LOOKAHEAD_COUNT", "2"))
+CV_CROSS_TRACK_GAIN = float(os.getenv("CV_CROSS_TRACK_GAIN", "2.0"))
+CV_ADAPTIVE_STEP = bool(int(os.getenv("CV_ADAPTIVE_STEP", "1")))
 
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
 
-# Options: "4x4_50", "5x5_100", "6x6_250", "apriltag_36h11"
-MARKER_DICT = os.getenv("MARKER_DICT", "4x4_50").upper()
+MARKER_DICT = os.getenv("MARKER_DICT", "4x4_100").upper()
 
-BOT_BASELINE_MM = 60.0
-# testing on a board of this dims
-KNOWN_BOARD_WIDTH_MM = 1150.0
-KNOWN_BOARD_HEIGHT_MM = 1460.0
-# KNOWN_BOARD_HEIGHT_MM = 250.0
-# KNOWN_BOARD_WIDTH_MM = 200
-_MAX_REPROJ_ERR_PX = 0.8
-_MAX_SIZE_JUMP_FRAC = 0.12
-_MAX_CENTER_JUMP_PX = 30.0 
+BOT_BASELINE_MM = 100.0
+
+KNOWN_BOARD_WIDTH_MM = float(800)
+KNOWN_BOARD_HEIGHT_MM = float(400)
+
+_MAX_REPROJ_ERR_PX = 1.2
+_MAX_SIZE_JUMP_FRAC = 0.15
+_MAX_CENTER_JUMP_PX = 40.0
+
+_REPROJ_GOOD_PX = 0.5
+_COND_HARD_LIMIT = 5e7
+_COND_WARN_LIMIT = 3e4
+
+_HEADING_MAX_DEG = float(os.getenv("HEADING_MAX_DEG", "10.0"))
+_HEADING_MIN_SAMPLES = int(os.getenv("HEADING_MIN_SAMPLES", "5"))
+_HEADING_HISTORY_SIZE = int(os.getenv("HEADING_HISTORY_SIZE", "30"))
+
+
+def correct_delta_mm(delta_board_mm: tuple[float, float], heading_rad: float) -> tuple[float, float]:
+    dx = float(delta_board_mm[0])
+    dy = float(delta_board_mm[1])
+    c = math.cos(float(heading_rad))
+    s = math.sin(float(heading_rad))
+    fwd = dx * c + dy * s
+    left = -dx * s + dy * c
+    return fwd, left
+
+
 @dataclass
 class CameraModel:
-    """Optional camera intrinsics/distortion used to undistort frames before detection."""
     K: Optional[np.ndarray] = None
     dist: Optional[np.ndarray] = None
 
+
 @dataclass
 class BoardPose:
-    """Image→board homography and quality metrics for the current calibration."""
     H_img2board: np.ndarray
     board_size_px: Tuple[int, int]
     mm_per_px: Optional[float] = None
     reproj_err_px: float = np.inf
     confidence: float = 0.0
+    corners_board_px: Optional[Dict[str, Tuple[float, float]]] = None
+
 
 @dataclass
 class BotPose:
-    """Robot pose in board pixels: center (px), heading (rad), inter-marker baseline (px), and confidence."""
-    center_board_px: Tuple[float, float]
+    center_board_mm: Tuple[float, float]
     heading_rad: float
-    pixel_baseline: float
+    baseline_mm: float
     confidence: float = 0.0
 
+
 def _aruco_dict():
-    """Get ArUco/AprilTag dictionary based on MARKER_DICT setting"""
-    dict_name = MARKER_DICT.replace("X", "x")  # Normalize
-    
-    # Map common names to OpenCV constants
+    dict_name = MARKER_DICT.replace("X", "x")
+
     dict_map = {
         "4x4_50": cv2.aruco.DICT_4X4_50,
         "4x4_100": cv2.aruco.DICT_4X4_100,
@@ -79,7 +104,7 @@ def _aruco_dict():
         "7x7_250": cv2.aruco.DICT_7X7_250,
         "7x7_1000": cv2.aruco.DICT_7X7_1000,
     }
-    
+
     if hasattr(cv2.aruco, 'DICT_APRILTAG_36h11'):
         dict_map.update({
             "apriltag_36h11": cv2.aruco.DICT_APRILTAG_36h11,
@@ -87,27 +112,53 @@ def _aruco_dict():
             "apriltag_25h9": cv2.aruco.DICT_APRILTAG_25h9,
             "apriltag_16h5": cv2.aruco.DICT_APRILTAG_16h5,
         })
-    
+
     dict_type = dict_map.get(dict_name.lower(), cv2.aruco.DICT_5X5_100)
     return cv2.aruco.getPredefinedDictionary(dict_type)
+
 
 def _aruco_params():
     if hasattr(cv2.aruco, "DetectorParameters"):
         p = cv2.aruco.DetectorParameters()
     else:
         p = cv2.aruco.DetectorParameters_create()
+
     if hasattr(p, "cornerRefinementMethod"):
         p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    if hasattr(p, "cornerRefinementMaxIterations"):
+        p.cornerRefinementMaxIterations = 50
+    if hasattr(p, "cornerRefinementMinAccuracy"):
+        p.cornerRefinementMinAccuracy = 0.01
+
+    if hasattr(p, "minMarkerPerimeterRate"):
+        p.minMarkerPerimeterRate = 0.01
+    if hasattr(p, "maxMarkerPerimeterRate"):
+        p.maxMarkerPerimeterRate = 8.0
+
+    if hasattr(p, "adaptiveThreshWinSizeMin"):
+        p.adaptiveThreshWinSizeMin = 5
+    if hasattr(p, "adaptiveThreshWinSizeMax"):
+        p.adaptiveThreshWinSizeMax = 55
+    if hasattr(p, "adaptiveThreshWinSizeStep"):
+        p.adaptiveThreshWinSizeStep = 10
     if hasattr(p, "adaptiveThreshConstant"):
         p.adaptiveThreshConstant = 7
-    # NEW tolerances
-    if hasattr(p, "minMarkerPerimeterRate"): p.minMarkerPerimeterRate = 0.02
-    if hasattr(p, "maxMarkerPerimeterRate"): p.maxMarkerPerimeterRate = 4.0
-    if hasattr(p, "adaptiveThreshWinSizeMin"): p.adaptiveThreshWinSizeMin = 3
-    if hasattr(p, "adaptiveThreshWinSizeMax"): p.adaptiveThreshWinSizeMax = 23
+
+    if hasattr(p, "polygonalApproxAccuracyRate"):
+        p.polygonalApproxAccuracyRate = 0.05
+
+    if hasattr(p, "minCornerDistanceRate"):
+        p.minCornerDistanceRate = 0.01
+    if hasattr(p, "maxErroneousBitsInBorderRate"):
+        p.maxErroneousBitsInBorderRate = 0.6
+
+    if hasattr(p, "minOtsuStdDev"):
+        p.minOtsuStdDev = 2.0
+
     return p
+
+
 class _ArucoCompatDetector:
-    """Wrapper that uses cv2.aruco’s APIs and returns {id: 4x2 corners}."""
     def __init__(self):
         self._dict = _aruco_dict()
         self._params = _aruco_params()
@@ -117,8 +168,6 @@ class _ArucoCompatDetector:
     def detect(self, gray):
         if self._new:
             corners, ids, _ = self._det.detectMarkers(gray)
-            # print(f"Detected {0 if ids is None else len(ids)} markers")
-            # print(ids)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._dict, parameters=self._params)
         id_map: Dict[int, np.ndarray] = {}
@@ -127,22 +176,21 @@ class _ArucoCompatDetector:
                 id_map[int(i)] = c.reshape(-1, 2).astype(np.float32)
         return id_map
 
+
 def _conf_from_visibility(found_corners: int, total: int = 4) -> float:
-    """
-    0.0 if <3 corners; otherwise linear with count.
-    3/4 -> 0.75, 4/4 -> 1.0
-    """
     if found_corners < 3:
         return 0.0
     return min(1.0, found_corners / float(total))
 
+
 class BoardCalibrator:
-    """Finds board corner markers, estimates image→board homography, and scores calibration quality."""
     def __init__(self, cam: Optional[CameraModel] = None):
         self.det = _ArucoCompatDetector()
         self.cam = cam or CameraModel()
         self.board_pose: Optional[BoardPose] = None
-        self.pose_fresh: bool = False  
+        self.pose_fresh: bool = False
+        self.calibration_locked: bool = False
+
     def _center_from_quad(self, tl, tr, br, bl) -> Tuple[float, float]:
         c = 0.25 * (tl + tr + br + bl)
         return float(c[0]), float(c[1])
@@ -175,104 +223,170 @@ class BoardCalibrator:
         elif have >= {"TR", "BR", "BL"} and "TL" not in have:
             out["TL"] = out["BL"] + (out["TR"] - out["BR"])
         return out
+
     @staticmethod
     def _reproj_error(H: np.ndarray, img_pts: np.ndarray, dst_pts: np.ndarray) -> float:
         proj = cv2.perspectiveTransform(img_pts[None].astype(np.float32), H)[0]
         return float(np.mean(np.linalg.norm(proj - dst_pts.astype(np.float32), axis=1)))
 
-    def calibrate(self, frame_bgr) -> Optional[BoardPose]:
-        """Compute and cache image→board homography; confidence = visibility only."""
-        self.pose_fresh = False  # reset; set True only if we accept a new pose
+    def calibrate(self, frame_bgr, force_recalibrate: bool = True) -> Optional[BoardPose]:
+        self.pose_fresh = False
 
         frame_bgr = self._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        id_map = self.det.detect(gray)
+        det_out = self.det.detect(gray)
+        if isinstance(det_out, tuple) and len(det_out) >= 3:
+            id_map = det_out[2]
+        else:
+            id_map = det_out
+        if id_map is None:
+            id_map = {}
+
         cs = self._collect_corners(id_map)
-        print("Calibrating, found corners:", id_map.keys(), cs.keys())
-
-        if len(cs) < 3:
-            return self.board_pose
-        cs = self._complete_quad(cs)
-        if not all(k in cs for k in ("TL", "TR", "BR", "BL")):
-            return self.board_pose
-
-        tl, tr, br, bl = cs["TL"], cs["TR"], cs["BR"], cs["BL"]
-        img_pts = np.array([tl, tr, br, bl], dtype=np.float32)
-        width_px  = max(float(np.linalg.norm(tr - tl)), 1e-6)
-        height_px = max(float(np.linalg.norm(bl - tl)), 1e-6)
-        board_rect = np.array(
-            [[0.0, 0.0], [width_px, 0.0], [width_px, height_px], [0.0, height_px]],
-            dtype=np.float32
-        )
-
-        # Use findHomography with RANSAC for outlier rejection
-        H, mask = cv2.findHomography(
-            img_pts, 
-            board_rect, 
-            method=cv2.RANSAC,
-            ransacReprojThreshold=2.0  # pixels
-        )
-        
-        if H is None or abs(H[2, 2]) < 1e-12:
-            return self.board_pose
-        H = H / H[2, 2]
-        
-        # Check inlier ratio - need at least 75% inliers for quality calibration
-        inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 1.0
-        if inlier_ratio < 0.75:
-            print(f"Low inlier ratio: {inlier_ratio:.2f}, rejecting calibration")
-            return self.board_pose
-
-        reproj = self._reproj_error(H, img_pts, board_rect)
-        found = sum(1 for k in ("TL", "TR", "BR", "BL") if k in cs)
+        found = len(cs)
         conf_raw = _conf_from_visibility(found)
         prev = self.board_pose
 
-        accept = True
-        if reproj > _MAX_REPROJ_ERR_PX:
-            accept = False
+        if found < 3:
+            if prev is not None:
+                prev.confidence = conf_raw
+            if not hasattr(self, '_last_reject_log') or time.time() - self._last_reject_log > 2.0:
+                print(f"Calibration: {found}/4 corners (need ≥3)")
+                self._last_reject_log = time.time()
+            return prev
 
-        if prev is not None:
+        if found == 3:
+            cs = self._complete_quad(cs)
+            if not hasattr(self, '_last_completion_log') or time.time() - self._last_completion_log > 3.0:
+                print("Calibration: Completed quad from 3 corners")
+                self._last_completion_log = time.time()
+
+        if not all(k in cs for k in ("TL", "TR", "BR", "BL")):
+            return prev
+
+        tl, tr, br, bl = cs["TL"], cs["TR"], cs["BR"], cs["BL"]
+        img_pts = np.array([tl, tr, br, bl], dtype=np.float32)
+
+        board_rect = np.array(
+            [
+                [0.0, KNOWN_BOARD_HEIGHT_MM],
+                [KNOWN_BOARD_WIDTH_MM, KNOWN_BOARD_HEIGHT_MM],
+                [KNOWN_BOARD_WIDTH_MM, 0.0],
+                [0.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+
+        H, mask = cv2.findHomography(img_pts, board_rect, cv2.RANSAC, 3.0)
+        if H is None:
+            return prev
+        if abs(H[2, 2]) > 1e-12:
+            H = H / H[2, 2]
+
+        reproj = self._reproj_error(H, img_pts, board_rect)
+
+        width_px = float(np.linalg.norm(tr - tl))
+        height_px = float(np.linalg.norm(bl - tl))
+        cond_H = np.linalg.cond(H)
+
+        if conf_raw < _CONF_MIN_BOARD:
+            if not hasattr(self, "_low_conf_log") or time.time() - self._low_conf_log > 2.0:
+                print(
+                    f"[BOARD_CAL] Low confidence: found {found}/4 corners, "
+                    f"conf_raw={conf_raw:.2f}, reproj={reproj:.3f}px, cond={cond_H:.1e}"
+                )
+                print("[BOARD_CAL] Marking calibration as unstable until markers recover.")
+                self._low_conf_log = time.time()
+
+        if reproj > _REPROJ_GOOD_PX:
+            if not hasattr(self, "_reproj_log") or time.time() - self._reproj_log > 2.5:
+                print(
+                    f"[BOARD_CAL] High reprojection error: {reproj:.3f}px "
+                    f"(threshold={_REPROJ_GOOD_PX})"
+                )
+                self._reproj_log = time.time()
+
+        if cond_H > _COND_WARN_LIMIT:
+            if not hasattr(self, "_cond_log") or time.time() - self._cond_log > 3.0:
+                print(
+                    f"[BOARD_CAL] Homography condition number high: {cond_H:.1e}, "
+                    f"warn_limit={_COND_WARN_LIMIT}, hard_limit={_COND_HARD_LIMIT}"
+                )
+                self._cond_log = time.time()
+
+        accept = not (reproj > _REPROJ_GOOD_PX and cond_H > _COND_HARD_LIMIT)
+        rejection_reason = None
+
+        if prev is not None and prev.board_size_px is not None:
             W0, H0 = prev.board_size_px
             if W0 > 0 and H0 > 0:
                 w_jump = abs(width_px - W0) / max(W0, 1e-6)
                 h_jump = abs(height_px - H0) / max(H0, 1e-6)
                 if (w_jump > _MAX_SIZE_JUMP_FRAC) or (h_jump > _MAX_SIZE_JUMP_FRAC):
                     accept = False
+                    rejection_reason = f"size_jump w={w_jump:.2%} h={h_jump:.2%}"
+
             c_new = np.array(self._center_from_quad(tl, tr, br, bl))
 
             try:
                 Hinv = np.linalg.inv(prev.H_img2board)
-                board_center = np.array([[0.5 * prev.board_size_px[0], 0.5 * prev.board_size_px[1]]], dtype=np.float32)[None]
+                board_center = np.array(
+                    [[0.5 * KNOWN_BOARD_WIDTH_MM, 0.5 * KNOWN_BOARD_HEIGHT_MM]],
+                    dtype=np.float32,
+                )[None]
                 img_center_prev = cv2.perspectiveTransform(board_center, Hinv)[0][0]
-                if float(np.linalg.norm(c_new - img_center_prev)) > _MAX_CENTER_JUMP_PX:
+                center_jump = float(np.linalg.norm(c_new - img_center_prev))
+                if center_jump > _MAX_CENTER_JUMP_PX:
                     accept = False
+                    rejection_reason = f"center_jump {center_jump:.1f}px > {_MAX_CENTER_JUMP_PX}px"
             except Exception:
                 pass
+        elif prev is None:
+            accept = True
 
-        prev_conf = getattr(prev, "confidence", 0.0) if prev else 0.0
-        conf_smooth = (.2 * prev_conf) + ((1.0 - .2) * conf_raw)
-
-        if not accept and prev is not None:
-            prev.confidence = float(conf_smooth)
+        if not accept:
+            if prev is not None:
+                prev.confidence = conf_raw
+            if not hasattr(self, '_last_reject_reason_log') or time.time() - self._last_reject_reason_log > 3.0:
+                if rejection_reason:
+                    print(f"Calibration rejected: {rejection_reason}")
+                self._last_reject_reason_log = time.time()
             return prev
 
-        mm_per_px_prev = getattr(prev, "mm_per_px", None)
+        conf_smooth = conf_raw
+
+        if prev is None or not hasattr(self, '_calibrated_once'):
+            print(f"[CALIBRATION] Homography updated and LOCKED. Board mapped to {KNOWN_BOARD_WIDTH_MM}mm × {KNOWN_BOARD_HEIGHT_MM}mm")
+            print("[CALIBRATION] Localization restored after instability.")
+            self._calibrated_once = True
+            self.calibration_locked = True
+
         self.board_pose = BoardPose(
             H_img2board=H,
-            board_size_px=(int(width_px), int(height_px)),
-            mm_per_px=mm_per_px_prev,
+            board_size_px=(int(round(width_px)), int(round(height_px))),
+            mm_per_px=None,
             reproj_err_px=float(reproj),
             confidence=float(conf_smooth),
+            corners_board_px={
+                "TL": (0.0, KNOWN_BOARD_HEIGHT_MM),
+                "TR": (KNOWN_BOARD_WIDTH_MM, KNOWN_BOARD_HEIGHT_MM),
+                "BR": (KNOWN_BOARD_WIDTH_MM, 0.0),
+                "BL": (0.0, 0.0),
+            },
         )
         self.pose_fresh = True
         return self.board_pose
 
+
 class BotTracker:
-    """Detects robot ArUco markers and outputs center/heading in the board coordinate frame."""
     def __init__(self, cal: BoardCalibrator):
         self.det = _ArucoCompatDetector()
         self.cal = cal
+        self._last_valid_pose: Optional[Tuple[BotPose, float]] = None
+        self._pose_timeout_s = 5.0
+
+        self._heading_hist: List[Tuple[float, float]] = []
+        self._heading_hist_max = _HEADING_HISTORY_SIZE
 
     @staticmethod
     def _center(c4):
@@ -282,15 +396,97 @@ class BotTracker:
     def _warp(H, pts_xy):
         return cv2.perspectiveTransform(pts_xy[None, :, :].astype(np.float32), H)[0]
 
+    def _add_heading_sample(self, v_board: np.ndarray) -> None:
+        vx, vy = float(v_board[0]), float(v_board[1])
+        norm = math.hypot(vx, vy)
+        if norm < 1e-6:
+            return
+        ux, uy = vx / norm, vy / norm
+        self._heading_hist.append((ux, uy))
+        if len(self._heading_hist) > self._heading_hist_max:
+            self._heading_hist.pop(0)
+
+    def _robust_heading(self) -> Optional[float]:
+        if not self._heading_hist:
+            return None
+
+        u = np.asarray(self._heading_hist, dtype=np.float32)
+        N = u.shape[0]
+        if N < _HEADING_MIN_SAMPLES:
+            ux, uy = u[-1]
+            return float(math.atan2(uy, ux))
+
+        cos_thresh = math.cos(math.radians(_HEADING_MAX_DEG))
+
+        best_inliers_mask = None
+        best_count = 0
+
+        for i in range(N):
+            ui = u[i]
+            dots = u @ ui
+            inliers_mask = dots >= cos_thresh
+            count = int(inliers_mask.sum())
+            if count > best_count:
+                best_count = count
+                best_inliers_mask = inliers_mask
+
+        if best_inliers_mask is None or best_count <= max(2, N // 3):
+            ux, uy = u[-1]
+            return float(math.atan2(uy, ux))
+
+        inliers = u[best_inliers_mask]
+        avg = inliers.mean(axis=0)
+        norm = float(np.linalg.norm(avg))
+        if norm < 1e-6:
+            ux, uy = u[-1]
+            return float(math.atan2(uy, ux))
+
+        ux, uy = avg[0] / norm, avg[1] / norm
+        return float(math.atan2(uy, ux))
+
     def track(self, frame_bgr) -> Optional[BotPose]:
-        """Detect markers 10/11, transform to board space, compute center, heading, and confidence."""
         if self.cal.board_pose is None:
             return None
 
         frame_bgr = self.cal._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        id_map = self.det.detect(gray)
-        if BOT_MARKERS[0] not in id_map or BOT_MARKERS[1] not in id_map:
+
+        det_out = self.det.detect(gray)
+        if isinstance(det_out, tuple) and len(det_out) >= 3:
+            id_map = det_out[2]
+        else:
+            id_map = det_out
+
+        if id_map is None:
+            id_map = {}
+
+        has_marker_0 = BOT_MARKERS[0] in id_map
+        has_marker_1 = BOT_MARKERS[1] in id_map
+
+        if not has_marker_0 and not has_marker_1:
+            if self._last_valid_pose is not None:
+                cached_pose, cached_time = self._last_valid_pose
+                age = time.time() - cached_time
+                if age < self._pose_timeout_s:
+                    if not hasattr(self, '_last_cache_use_log') or time.time() - self._last_cache_use_log > 1.0:
+                        print(f"BOT_TRACK: Using cached pose (age={age:.1f}s) - markers temporarily lost")
+                        self._last_cache_use_log = time.time()
+                    return cached_pose
+            return None
+
+        if not (has_marker_0 and has_marker_1):
+            missing = BOT_MARKERS[1] if has_marker_0 else BOT_MARKERS[0]
+            detected = BOT_MARKERS[0] if has_marker_0 else BOT_MARKERS[1]
+            if not hasattr(self, '_last_single_marker_warn') or time.time() - self._last_single_marker_warn > 3.0:
+                print(f"BOT_TRACK WARNING: Only detected marker {detected}, missing {missing} - using cached pose")
+                self._last_single_marker_warn = time.time()
+
+            if self._last_valid_pose is not None:
+                cached_pose, cached_time = self._last_valid_pose
+                age = time.time() - cached_time
+                if age < self._pose_timeout_s:
+                    return cached_pose
+
             return None
 
         H = self.cal.board_pose.H_img2board
@@ -300,109 +496,217 @@ class BotTracker:
 
         v = pair_board[1] - pair_board[0]
         center = 0.5 * (pair_board[0] + pair_board[1])
-        heading = float(np.arctan2(v[1], v[0]))  # [-pi, pi]
-        pix_base = float(np.linalg.norm(v))
-        conf = float(np.clip((pix_base / 40.0), 0.0, 1.0))
+        baseline = float(np.linalg.norm(v))
 
-        return BotPose(
-            center_board_px=(center[0], center[1]),
+        self._add_heading_sample(v)
+        heading_robust = self._robust_heading()
+        if heading_robust is None:
+            heading = float(np.arctan2(v[1], v[0]))
+        else:
+            heading = heading_robust
+
+        baseline_ratio = baseline / BOT_BASELINE_MM
+        conf = float(np.clip(baseline_ratio, 0.8, 1.0))
+
+        pose = BotPose(
+            center_board_mm=(float(center[0]), float(center[1])),
             heading_rad=heading,
-            pixel_baseline=pix_base,
+            baseline_mm=baseline,
             confidence=conf,
         )
+        if has_marker_0 and has_marker_1:
+            print(f"BOT_TRACK: BOT located at {pose}")
+        self._last_valid_pose = (pose, time.time())
+        return pose
 
-class ScaleEstimator:
-    """Computes mm/px scale from either known board size or known robot marker baseline."""
-    def __init__(self, cal: BoardCalibrator):
-        self.cal = cal
 
-    def from_board_size(self) -> Optional[float]:
-        """Estimate mm/px using known physical board dimensions."""
-        bp = self.cal.board_pose
-        if bp is None:
+class PathCorrectionEngine:
+    """
+    Computes small, rate-limited correction steps based on cross-track error
+    relative to the current segment of the path. Outputs (X, Y) in the robot
+    frame (forward, left), which we send directly as G-code relative moves.
+    """
+
+    def __init__(self, cvp: "CVPipeline"):
+        self.cvp = cvp
+        self.last_correction_time = 0.0
+        self.correction_count = 0
+        self.min_correction_interval = 1.0 / CV_CORRECTION_RATE_HZ
+
+        # Deviation history for RMS stats (filled externally)
+        self.dev_history: list[float] = []
+
+    def reset(self) -> None:
+        self.last_correction_time = 0.0
+        self.correction_count = 0
+        self.dev_history.clear()
+
+    def _pose(self) -> Optional[tuple[float, float, float, float]]:
+        pose = self.cvp.get_pose_mm()
+        if not pose:
             return None
-        Wpx, Hpx = bp.board_size_px
-        sx = KNOWN_BOARD_WIDTH_MM / float(Wpx)
-        sy = KNOWN_BOARD_HEIGHT_MM / float(Hpx)
-        mm_per_px = 0.5 * (sx + sy)
-        self.cal.board_pose.mm_per_px = mm_per_px
-        return mm_per_px
+        (cx, cy), heading, conf = pose
+        return float(cx), float(cy), float(heading), float(conf)
 
-    def from_bot_baseline(self, bot: BotPose) -> Optional[float]:
-        """Estimate mm/px using the two-Tag baseline on the robot."""
-        if bot.pixel_baseline <= 1e-6:
+    @staticmethod
+    def _wp_xy(wp: object) -> Tuple[float, float]:
+        if hasattr(wp, "x_mm") and hasattr(wp, "y_mm"):
+            return float(getattr(wp, "x_mm")), float(getattr(wp, "y_mm"))
+        if isinstance(wp, (tuple, list)) and len(wp) >= 2:
+            return float(wp[0]), float(wp[1])
+        raise ValueError("Waypoint must have x_mm/y_mm or be (x, y)")
+    def compute_correction(
+        self,
+        waypoints: list,
+        current_index: int,
+        next_is_g1: bool = True,
+    ) -> Optional[Tuple[int, int]]:
+
+        if not next_is_g1:
             return None
-        mm_per_px = BOT_BASELINE_MM / bot.pixel_baseline
-        if self.cal.board_pose:
-            self.cal.board_pose.mm_per_px = mm_per_px
-        return mm_per_px
+
+        if current_index >= len(waypoints) - 1:
+            return None
+
+        pose = self._pose()
+        if pose is None:
+            return None
+        cx, cy, heading, conf = pose
+
+        # low-confidence pose
+        if conf < 0.60:
+            return None
+
+        try:
+            x1, y1 = self._wp_xy(waypoints[current_index])
+            x2, y2 = self._wp_xy(waypoints[current_index + 1])
+        except Exception:
+            return None
+
+        seg_dx = x2 - x1
+        seg_dy = y2 - y1
+        seg_len = math.hypot(seg_dx, seg_dy)
+        if seg_len < 1e-6:
+            return None
+
+
+        rel_x = cx - x1
+        rel_y = cy - y1
+        cross = (rel_y * seg_dx - rel_x * seg_dy) / seg_len
+        err_mm = abs(cross)
+
+        if err_mm < 1.0:
+            return None
+
+        nx = -seg_dy / seg_len
+        ny =  seg_dx / seg_len
+        
+        gain = 0.4          # stable gain
+        max_corr = 6.0      # board-frame clamp
+
+        corr = -gain * cross
+        corr = max(-max_corr, min(max_corr, corr))
+
+        dx_board = corr * nx
+        dy_board = corr * ny
+
+        cos_h = math.cos(heading)
+        sin_h = math.sin(heading)
+
+        fwd  =  dx_board * cos_h + dy_board * sin_h
+        left = -dx_board * sin_h + dy_board * cos_h
+
+        fwd  = max(-6.0, min(6.0, fwd))
+        left = max(-6.0, min(6.0, left))
+
+        sx = int(round(fwd))
+        sy = int(round(left))
+
+        if sx == 0 and sy == 0:
+            return None
+
+        return sx, sy
+
+
+    def log_deviation(self, d_mm: float) -> None:
+        self.dev_history.append(float(d_mm))
+        if len(self.dev_history) > 2000:
+            self.dev_history.pop(0)
+
+    def rms_deviation(self) -> float:
+        if not self.dev_history:
+            return 0.0
+        s = sum(d * d for d in self.dev_history)
+        return math.sqrt(s / len(self.dev_history))
+
+
 
 class CVPipeline:
-    """Top-level CV pipeline: board calibration, bot tracking, scale smoothing, and API to query state."""
     def __init__(self, cam: Optional[CameraModel] = None):
         self.cal = BoardCalibrator(cam)
         self.trk = BotTracker(self.cal)
-        self.scale = ScaleEstimator(self.cal)
         self._bot: Optional[BotPose] = None
-        self._mm_per_px_smooth: Optional[float] = None
         self._pose_smooth: Optional[BotPose] = None
-        self._path_deviation_history: List[float] = []  # Track path following accuracy
-
+        self.correction = PathCorrectionEngine(self)
     @staticmethod
     def _ema(old, new, a):
-        """Simple exponential moving average helper (returns new if old is None)."""
         if old is None:
             return new
         return a * old + (1.0 - a) * new
+
     def _ema_angle(self, prev: float, new: float, a: float) -> float:
         d = math.atan2(math.sin(new - prev), math.cos(new - prev))
         h = prev + (1.0 - a) * d
         return math.atan2(math.sin(h), math.cos(h))
-    # wrap to [-pi, pi]
+
     def calibrate_board(self, frame_bgr) -> bool:
-        """Run a single-board calibration step from a frame; returns True if a pose is available."""
         return self.cal.calibrate(frame_bgr) is not None
 
     def update_bot(self, frame_bgr) -> bool:
-        """Track the robot for the given frame and update smoothed pose and mm/px scale if available."""
         bot = self.trk.track(frame_bgr)
         if bot is None:
             return False
         self._bot = bot
 
-        if self.cal.board_pose and self.cal.board_pose.mm_per_px is None:
-            self.scale.from_bot_baseline(bot)
-
-        if self.cal.board_pose and self.cal.board_pose.mm_per_px is not None:
-            self._mm_per_px_smooth = self._ema(self._mm_per_px_smooth, float(self.cal.board_pose.mm_per_px), _SCALE_ALPHA)
-            self.cal.board_pose.mm_per_px = self._mm_per_px_smooth
-
         if self._pose_smooth is None:
             self._pose_smooth = bot
         else:
-            cx = self._ema(self._pose_smooth.center_board_px[0], bot.center_board_px[0], _POSE_ALPHA)
-            cy = self._ema(self._pose_smooth.center_board_px[1], bot.center_board_px[1], _POSE_ALPHA)
+            cx = self._ema(self._pose_smooth.center_board_mm[0], bot.center_board_mm[0], _POSE_ALPHA)
+            cy = self._ema(self._pose_smooth.center_board_mm[1], bot.center_board_mm[1], _POSE_ALPHA)
             hd = self._ema_angle(self._pose_smooth.heading_rad, bot.heading_rad, _POSE_ALPHA)
 
             self._pose_smooth = BotPose(
-                center_board_px=(cx, cy),
+                center_board_mm=(cx, cy),
                 heading_rad=hd,
-                pixel_baseline=bot.pixel_baseline,
+                baseline_mm=bot.baseline_mm,
                 confidence=max(self._pose_smooth.confidence, bot.confidence),
             )
         return True
 
     def process_frame(self, frame_bgr) -> tuple[bool, float]:
         t0 = time.monotonic()
+
+        prev_state = self.get_state()
+        prev_calibrated = prev_state["calibrated"]
+
+        self.cal.calibrate(frame_bgr)
+
         st = self.get_state()
-        needs_cal = not st["calibrated"] or st["mm_per_px"] is None
-        if needs_cal or (st["board_confidence"] is not None and st["board_confidence"] < _CONF_MIN_BOARD):
-            self.calibrate_board(frame_bgr)
+        calibrated = st["calibrated"]
+        conf = st["board_confidence"]
 
-        if self.cal.board_pose is not None and self.cal.board_pose.mm_per_px is None:
-            self.scale.from_board_size()
+        if not calibrated:
+            if not hasattr(self, "_no_cal_log") or time.time() - self._no_cal_log > 3.0:
+                print("[CALIBRATION] No valid board calibration. Waiting for stable corner markers.")
+                self._no_cal_log = time.time()
+        elif conf is not None and conf < _CONF_MIN_BOARD:
+            if not hasattr(self, "_low_conf_frame_log") or time.time() - self._low_conf_frame_log > 3.0:
+                print(f"[CALIBRATION] Runtime board confidence {conf:.2f} < {_CONF_MIN_BOARD:.2f}")
+                print("[CALIBRATION] Treating homography as unstable and continuously re-estimating from markers.")
+                self._low_conf_frame_log = time.time()
 
-        _ = self.update_bot(frame_bgr)
+        bot_ok = self.update_bot(frame_bgr)
+
         st = self.get_state()
 
         good_cal = (
@@ -417,156 +721,183 @@ class CVPipeline:
 
         return valid, time.monotonic() - t0
 
-
     def get_state(self):
-        """Return a serializable snapshot of current calibration, scale, and (smoothed) bot pose."""
         bp = self.cal.board_pose
         bot = self._pose_smooth or self._bot
         return {
             "calibrated": bp is not None,
-            "mm_per_px": None if bp is None else bp.mm_per_px,
             "board_size_px": None if bp is None else bp.board_size_px,
             "board_reproj_err_px": None if bp is None else bp.reproj_err_px,
             "board_confidence": None if bp is None else bp.confidence,
             "board_pose_fresh": getattr(self.cal, "pose_fresh", False),
             "bot_pose": None if bot is None else {
-                "center_board_px": bot.center_board_px,
+                "center_board_mm": bot.center_board_mm,
                 "heading_rad": bot.heading_rad,
-                "pixel_baseline": bot.pixel_baseline,
+                "baseline_mm": bot.baseline_mm,
                 "confidence": bot.confidence,
             },
         }
 
-    def board_size_mm(self) -> Optional[Tuple[float, float]]:
-        """Board physical size in mm using current mm/px; None if not calibrated or unscaled."""
-        st = self.get_state()
-        if not st["calibrated"] or st["mm_per_px"] is None or st["board_size_px"] is None:
+    def _baseline_scale(self) -> Optional[float]:
+        bot = self._pose_smooth or self._bot
+        if bot is None:
             return None
-        mpp = float(st["mm_per_px"])
-        Wpx, Hpx = st["board_size_px"]
-        return mpp * float(Wpx), mpp * float(Hpx)
+        if bot.baseline_mm <= 1e-6:
+            return None
+        return BOT_BASELINE_MM / bot.baseline_mm
+
+    def board_size_mm(self) -> Optional[Tuple[float, float]]:
+        if self.cal.board_pose is None:
+            return None
+        return (KNOWN_BOARD_WIDTH_MM, KNOWN_BOARD_HEIGHT_MM)
+
+    def get_board_bounds_mm(self) -> Optional[Tuple[float, float, float, float]]:
+        sz = self.board_size_mm()
+        if not sz:
+            return None
+
+        Wmm, Hmm = sz
+        margin = max(BOARD_MARGIN_MM, BOARD_MARGIN_FRAC * min(Wmm, Hmm))
+        safe_min_x = margin
+        safe_min_y = margin
+        safe_max_x = Wmm - margin
+        safe_max_y = Hmm - margin
+        return (safe_min_x, safe_min_y, safe_max_x, safe_max_y)
+
+    def _fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
+        """Scale normalized [0,1] waypoints to board mm coordinates with margin."""
+        if not wps:
+            return []
+        Wmm, Hmm = board_mm
+        
+
+        xs = [w.x_mm for w in wps]
+        ys = [w.y_mm for w in wps]
+        minx = min(xs)
+        maxx = max(xs)
+        miny = min(ys)
+        maxy = max(ys)
+        
+        w_norm = max(maxx - minx, 1e-6)
+        h_norm = max(maxy - miny, 1e-6)
+        
+        target_w = (1.0 - 2 * margin_frac) * Wmm
+        target_h = (1.0 - 2 * margin_frac) * Hmm
+        scale = min(target_w / w_norm, target_h / h_norm)
+        
+        cx_norm = 0.5 * (minx + maxx)
+        cy_norm = 0.5 * (miny + maxy)
+        
+        cx_board = 0.5 * Wmm
+        cy_board = 0.5 * Hmm
+        
+        out = []
+        for p in wps:
+            x_mm = (p.x_mm - cx_norm) * scale + cx_board
+            y_mm = (p.y_mm - cy_norm) * scale + cy_board
+            
+            x_mm = max(margin_frac * Wmm, min(x_mm, (1.0 - margin_frac) * Wmm))
+            y_mm = max(margin_frac * Hmm, min(y_mm, (1.0 - margin_frac) * Hmm))
+            
+            out.append(Waypoint(x_mm, y_mm))
+        return out
 
     def fit_path_to_board(self, wps, margin_frac: float = 0.05):
-        """Scale/center normalized waypoints to the calibrated board."""
         sz = self.board_size_mm()
         if not sz:
             return []
+        
+        if self.cal.board_pose is None or self.cal.board_pose.confidence < 0.75:
+            print(
+                "PATH FITTING REJECTED: Board not sufficiently calibrated "
+                f"(confidence={getattr(self.cal.board_pose, 'confidence', 0.0):.2f}, need ≥0.75)"
+            )
+            return []
+
         return _fit_to_board(wps, sz, margin_frac)
 
-    def corrected_delta_for_bt(self, desired_delta_board_mm, rotate_into_bot_frame=False):
-        """Optionally rotate (dx,dy) in BOARD mm into ROBOT frame using the latest smoothed heading."""
-        bp = self.cal.board_pose
-        if bp is None or bp.mm_per_px is None:
+
+    def get_pose_mm(self, use_raw=False):
+        if self._bot is None:
             return None
-        dx, dy = float(desired_delta_board_mm[0]), float(desired_delta_board_mm[1])
-        if not rotate_into_bot_frame:
-            return dx, dy
-        bot = self._pose_smooth or self._bot
+
+        bot = self._bot if use_raw else self._pose_smooth
         if bot is None:
-            return dx, dy
-        return board_to_robot(dx, dy, bot.heading_rad)
+            return None
 
-    def get_pose_mm(self):
-        """Smoothed robot pose in mm and heading/confidence, or None if not ready."""
-        st = self.get_state()
-        if not st["calibrated"] or st["bot_pose"] is None or st["mm_per_px"] is None:
-            return None
-        px = st["bot_pose"]["center_board_px"]
-        mpp = float(st["mm_per_px"])
-        return (px[0] * mpp, px[1] * mpp), float(st["bot_pose"]["heading_rad"]), float(st["bot_pose"]["confidence"])
-    
-    def get_path_correction(
-        self, 
-        target_board_mm: Tuple[float, float],
-        max_correction_mm: float = 5.0
-    ) -> Optional[Tuple[float, float]]:
-        """
-        Compute real-time path correction based on current vs target position.
-        
-        Args:
-            target_board_mm: Target (x, y) position in board mm coordinates
-            max_correction_mm: Maximum correction magnitude to prevent overcorrection
-        
-        Returns:
-            (dx_correction_mm, dy_correction_mm) or None if not ready
-        """
-        pose = self.get_pose_mm()
-        if not pose:
-            return None
-        
-        (current_x, current_y), heading, conf = pose
-        target_x, target_y = target_board_mm
-        
-        # Compute error vector
-        error_x = target_x - current_x
-        error_y = target_y - current_y
-        error_mag = math.sqrt(error_x**2 + error_y**2)
-        
-        # Track deviation for diagnostics
-        self._path_deviation_history.append(error_mag)
-        if len(self._path_deviation_history) > 100:
-            self._path_deviation_history.pop(0)
-        
-        # Clamp correction to avoid overcorrection
-        if error_mag > max_correction_mm:
-            scale = max_correction_mm / error_mag
-            error_x *= scale
-            error_y *= scale
-        
-        # Apply proportional gain based on confidence
-        gain = 0.5 * conf  # Lower confidence = gentler correction
-        
-        return (error_x * gain, error_y * gain)
-    
+        cx, cy = bot.center_board_mm
+        return (cx, cy), float(bot.heading_rad), float(bot.confidence)
     def get_path_stats(self) -> Dict:
-        """Get statistics on path following performance."""
-        if not self._path_deviation_history:
+        if not self.correction.dev_history:
             return {}
-        
-        arr = np.asarray(self._path_deviation_history, dtype=float)
-        rms = float(np.sqrt(np.mean(arr**2))) if arr.size else 0.0
+        arr = np.asarray(self.correction.dev_history, dtype=float)
         return {
-            "mean_deviation_mm": float(np.mean(arr)) if arr.size else 0.0,
-            "max_deviation_mm": float(np.max(arr)) if arr.size else 0.0,
-            "std_deviation_mm": float(np.std(arr)) if arr.size else 0.0,
-            "rms_deviation_mm": rms,
+            "mean_deviation_mm": float(arr.mean()),
+            "max_deviation_mm": float(arr.max()),
+            "std_deviation_mm": float(arr.std()),
+            "rms_deviation_mm": float(np.sqrt(np.mean(arr**2))),
         }
-    
-    def build_firmware_gcode(self, gcode_text: str, canvas_size: Tuple[float, float] = (575.0, 730.0)) -> str:
-        """
-        Convert pathfinding G-code (canvas units) into firmware-ready, relative G-code
-        using the current calibration.
 
-        - Scales G0/G1 X/Y from canvas units to detected board mm.
-        - Normalizes to firmware subset: enforce G91 and map any legacy M3/M5 to M280.
 
-        Returns the G-code string ready to transmit. Requires a valid board size.
-        """
-        bs = self.board_size_mm()
-        if not bs:
-            raise RuntimeError("Board not calibrated: board size unknown.")
-        scaled = scale_gcode_to_board(gcode_text, canvas_size, bs)
-        print(f"DEBUG build_firmware_gcode: After scaling, first 5 lines:")
-        for i, line in enumerate(scaled.split('\n')[:5]):
-            print(f"  {i}: {line}")
-        
-        normalized = convert_pathfinding_gcode(scaled)
-        print(f"DEBUG build_firmware_gcode: After normalization, first 5 lines:")
-        for i, line in enumerate(normalized.split('\n')[:5]):
-            print(f"  {i}: {line}")
-        
-        # Optionally segment long moves to avoid firmware NACKs on large deltas
-        try:
-            max_seg = float(os.getenv("GCODE_MAX_SEG_MM", "100.0"))
-        except Exception:
-            max_seg = 100.0
-        try:
-            max_axis = float(os.getenv("GCODE_MAX_AXIS_SEG_MM", "80.0"))
-        except Exception:
-            max_axis = max_seg
-        result = segment_long_moves(normalized, max_segment_mm=max_seg, max_axis_segment_mm=max_axis)
-        print(f"DEBUG build_firmware_gcode: After segmentation, first 5 lines:")
-        for i, line in enumerate(result.split('\n')[:5]):
-            print(f"  {i}: {line}")
-        
-        return result
+    def build_firmware_gcode(self, gcode_text: str) -> str:
+        bounds = self.get_board_bounds_mm()
+        if bounds is None:
+            raise ValueError("Board not calibrated – bounds unavailable")
+
+        min_x, min_y, max_x, max_y = bounds
+
+        pos_x = 0.0
+        pos_y = 0.0
+
+        out_lines = []
+
+        for raw in gcode_text.splitlines():
+            line = raw.strip()
+
+            if not line or line.startswith(';') or line.startswith('M'):
+                out_lines.append(raw)
+                continue
+
+            if not (line.startswith('G0') or line.startswith('G1')):
+                out_lines.append(raw)
+                continue
+
+            parts = line.split()
+            dx = dy = 0.0
+
+            for p in parts[1:]:
+                if p.startswith('X'):
+                    dx = float(p[1:])
+                elif p.startswith('Y'):
+                    dy = float(p[1:])
+
+            next_x = pos_x + dx
+            next_y = pos_y + dy
+
+            clamped_x = min(max(next_x, min_x), max_x)
+            clamped_y = min(max(next_y, min_y), max_y)
+            if (next_x != clamped_x) or (next_y != clamped_y):
+                raise RuntimeError(
+                    f"G-code move would exit board: "
+                    f"({next_x:.1f},{next_y:.1f}) "
+                    f"safe=({min_x:.1f}-{max_x:.1f},{min_y:.1f}-{max_y:.1f})"
+            )
+
+            actual_dx = clamped_x - pos_x
+            actual_dy = clamped_y - pos_y
+
+            if abs(actual_dx) < 1e-3 and abs(actual_dy) < 1e-3:
+                continue
+
+            pos_x = clamped_x
+            pos_y = clamped_y
+
+            cmd = [parts[0]]
+            if abs(actual_dx) >= 1e-3:
+                cmd.append(f"X{actual_dx:.0f}")
+            if abs(actual_dy) >= 1e-3:
+                cmd.append(f"Y{actual_dy:.0f}")
+
+            out_lines.append(" ".join(cmd))
+
+        return "\n".join(out_lines)
