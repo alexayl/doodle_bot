@@ -6,11 +6,9 @@ import cv2
 import math
 import time
 from app.utils import board_to_robot
-from app.geom import fit_path_to_board as _fit_to_board
 import os
 from app.path_parse import (
     load_gcode_file,
-    convert_pathfinding_gcode,
     scale_gcode_to_board,
 )
 
@@ -46,8 +44,8 @@ _REPROJ_GOOD_PX = 0.5
 _COND_HARD_LIMIT = 5e7
 _COND_WARN_LIMIT = 3e4
 
-_HEADING_RANSAC_MAX_DEG = float(os.getenv("HEADING_RANSAC_MAX_DEG", "10.0"))
-_HEADING_RANSAC_MIN_SAMPLES = int(os.getenv("HEADING_RANSAC_MIN_SAMPLES", "5"))
+_HEADING_MAX_DEG = float(os.getenv("HEADING_MAX_DEG", "10.0"))
+_HEADING_MIN_SAMPLES = int(os.getenv("HEADING_MIN_SAMPLES", "5"))
 _HEADING_HISTORY_SIZE = int(os.getenv("HEADING_HISTORY_SIZE", "30"))
 
 
@@ -279,7 +277,7 @@ class BoardCalibrator:
             dtype=np.float32,
         )
 
-        H = cv2.getPerspectiveTransform(img_pts.astype(np.float32), board_rect.astype(np.float32))
+        H, mask = cv2.findHomography(img_pts, board_rect, cv2.RANSAC, 3.0)
         if H is None:
             return prev
         if abs(H[2, 2]) > 1e-12:
@@ -414,11 +412,11 @@ class BotTracker:
 
         u = np.asarray(self._heading_hist, dtype=np.float32)
         N = u.shape[0]
-        if N < _HEADING_RANSAC_MIN_SAMPLES:
+        if N < _HEADING_MIN_SAMPLES:
             ux, uy = u[-1]
             return float(math.atan2(uy, ux))
 
-        cos_thresh = math.cos(math.radians(_HEADING_RANSAC_MAX_DEG))
+        cos_thresh = math.cos(math.radians(_HEADING_MAX_DEG))
 
         best_inliers_mask = None
         best_count = 0
@@ -766,12 +764,49 @@ class CVPipeline:
         safe_max_y = Hmm - margin
         return (safe_min_x, safe_min_y, safe_max_x, safe_max_y)
 
+    def _fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
+        """Scale normalized [0,1] waypoints to board mm coordinates with margin."""
+        if not wps:
+            return []
+        Wmm, Hmm = board_mm
+        
+
+        xs = [w.x_mm for w in wps]
+        ys = [w.y_mm for w in wps]
+        minx = min(xs)
+        maxx = max(xs)
+        miny = min(ys)
+        maxy = max(ys)
+        
+        w_norm = max(maxx - minx, 1e-6)
+        h_norm = max(maxy - miny, 1e-6)
+        
+        target_w = (1.0 - 2 * margin_frac) * Wmm
+        target_h = (1.0 - 2 * margin_frac) * Hmm
+        scale = min(target_w / w_norm, target_h / h_norm)
+        
+        cx_norm = 0.5 * (minx + maxx)
+        cy_norm = 0.5 * (miny + maxy)
+        
+        cx_board = 0.5 * Wmm
+        cy_board = 0.5 * Hmm
+        
+        out = []
+        for p in wps:
+            x_mm = (p.x_mm - cx_norm) * scale + cx_board
+            y_mm = (p.y_mm - cy_norm) * scale + cy_board
+            
+            x_mm = max(margin_frac * Wmm, min(x_mm, (1.0 - margin_frac) * Wmm))
+            y_mm = max(margin_frac * Hmm, min(y_mm, (1.0 - margin_frac) * Hmm))
+            
+            out.append(Waypoint(x_mm, y_mm))
+        return out
 
     def fit_path_to_board(self, wps, margin_frac: float = 0.05):
         sz = self.board_size_mm()
         if not sz:
             return []
-
+        
         if self.cal.board_pose is None or self.cal.board_pose.confidence < 0.75:
             print(
                 "PATH FITTING REJECTED: Board not sufficiently calibrated "

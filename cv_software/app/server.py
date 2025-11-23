@@ -18,7 +18,7 @@ from app.cv_core import CVPipeline
 from app.cv_core import BOARD_MARGIN_MM as CV_BOARD_MARGIN_MM, BOARD_MARGIN_FRAC as CV_BOARD_MARGIN_FRAC
 from app.control import PathRun, Waypoint
 from app.camera import ThreadedCamera, CameraConfig
-from app.path_parse import load_gcode_file, convert_pathfinding_gcode
+from app.path_parse import load_gcode_file
 from app.bt_link import BTLink
 from app.utils import encode_jpeg, Metrics
 
@@ -126,7 +126,6 @@ def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Option
             )
             return None
     else:
-        # If we do not know bounds or pose, still allow mapping but log it
         print("AXIS WARNING: No pose or bounds available in _map_board_to_robot_steps")
 
     def _quantize(val: float) -> int:
@@ -135,7 +134,6 @@ def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Option
         mag = max(min_step, int(round(abs(val))))
         return mag if val >= 0 else -mag
 
-    # Map board frame to firmware frame using current sign guess
     cmd_x = AXIS_SIGN["X"] * float(bx)
     cmd_y = AXIS_SIGN["Y"] * float(by)
     sx = _quantize(cmd_x)
@@ -184,7 +182,6 @@ def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
 
     print("AXIS DETECT: Starting axis detection")
 
-    # Must have a valid pose first
     pose = _wait_for_pose(5.0)
     if not pose:
         print("AXIS DETECT FAIL: No pose available.")
@@ -298,7 +295,7 @@ def _home_bot(
     timeout_s: float = 45.0,
 ) -> bool:
     """
-    Simple, bounded homing toward top-left corner.
+    bounded homing toward top-left corner.
     Uses board-frame deltas only.
     NO probes, NO heading, NO sign guessing.
     All moves are safety-checked through _map_board_to_robot_steps().
@@ -350,20 +347,16 @@ def _home_bot(
             print("HOME ✓ reached TL target")
             return True
 
-        # Step size
         step = step_coarse if dist > 120 else step_fine
         step = max(6, min(step, dist * 0.45))
 
-        # Board-frame direction (unit)
         norm = math.hypot(dx, dy)
         ux = dx / norm
         uy = dy / norm
 
-        # Desired small board-frame move
         bx = ux * step
         by = uy * step
 
-        # Convert via SAFE MAPPER
         steps = _map_board_to_robot_steps(bx, by)
         if steps is None:
             print("HOME: Step rejected by safety map (would exit board). Stopping.")
@@ -374,7 +367,6 @@ def _home_bot(
         print(f"HOME → {cmd.strip()}")
         bt.send_gcode_windowed(cmd, 1)
 
-        # Confirm movement
         before = (cx, cy)
         p2 = _wait_for_pose_change(before, 1.5, 3.5)
         if not p2:
@@ -503,7 +495,7 @@ def _read_gcode_text(path_or_name: str) -> str:
         return f.read()
 
 # -----------------------------------------------------------------------------#
-# CV worker (kept for metrics/overlay). Optional legacy move streaming gated.
+# CV worker (kept for metrics/overlay).
 # -----------------------------------------------------------------------------#
 _cv_thread: Optional[threading.Thread] = None
 
@@ -555,7 +547,6 @@ def _cv_worker():
         pass
 
     cam = get_cam()
-    # Legacy move streaming is removed; BLE now only receives full G-code packets.
 
     while True:
         # if not bt.client or not bt.client.is_connected:
@@ -682,7 +673,6 @@ def erase():
             RUN.stop()
             return redirect(url_for("erase"))
 
-        # 1) Build normalized path for local preview/control (unchanged)
         raw_norm = _load_named_gcode_normalized("erase")
         if not raw_norm:
             error = "No erase path found in pathfinding directory."
@@ -798,7 +788,6 @@ def home_robot():
     print("HOME: Requested homing sequence")
     _ensure_cv_thread()
     print("HOME: Ensuring board is calibrated...")
-    # Wait for calibration AND scale to be ready (up to 20 seconds for robot markers)
     timeout = 20.0
     start_time = time.time()
     last_log_time = 0.0
@@ -820,7 +809,6 @@ def home_robot():
     state = cvp.get_state()
     if not state["calibrated"]:
         return {"success": False, "error": "Board not calibrated after 20s timeout"}, 400
-    # Removed mm_per_px dependency/error path
     
     ok = _home_bot()
     if ok:
@@ -840,7 +828,6 @@ def test_send():
         with open(gcode_file, 'r') as f:
             gcode_str = f.read()
         
-        # Initialize CV scale and board size before sending
         if not cvp.get_state()["calibrated"]:
             return {"error": "Board not calibrated - wait for calibration to lock"}, 400
         
@@ -855,7 +842,7 @@ def test_send():
             print(f"TEST_SEND: Board {board_size[0]:.1f}mm × {board_size[1]:.1f}mm, margins={margin:.1f}mm")
             print(f"TEST_SEND: Safe zone ({min_x+margin:.1f},{min_y+margin:.1f}) to ({max_x-margin:.1f},{max_y-margin:.1f})")
         
-        normalized = convert_pathfinding_gcode(gcode_str)
+        normalized = gcode_str
         
         print(f"Sending test G-code from {gcode_file}:")
         for i, line in enumerate(normalized.split('\n')[:10]):
