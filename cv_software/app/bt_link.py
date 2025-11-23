@@ -61,6 +61,7 @@ class BTLink:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._ready_evt: Optional[threading.Event] = None
+        self._write_with_response: bool = True
 
     # ---------------- Core helpers ----------------
 
@@ -121,7 +122,6 @@ class BTLink:
         if not self.client or not self.client.is_connected:
             raise RuntimeError("Not connected to BLE device")
 
-        # Normalize line endings, keep only non-empty & non-comment lines
         lines = [
             ln.strip()
             for ln in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -134,7 +134,6 @@ class BTLink:
             if line.strip().upper().startswith("G90"):
                 line = "G90"
 
-            # Block if we have too many instructions in flight
             while self.instructions_in_flight >= self.max_ahead:
                 time.sleep(0.05)
 
@@ -148,7 +147,7 @@ class BTLink:
         if not self.client or not self.client.is_connected:
             raise RuntimeError("Not connected to BLE device")
         for line in lines:
-            # Block if we have too many instructions in flight
+            # block if too many instructions in flight
             while self.instructions_in_flight >= self.max_ahead:
                 time.sleep(0.05)
             
@@ -174,7 +173,6 @@ class BTLink:
 
         target = None
 
-        # First allow exact/partial name match
         for d in devices:
             name = d.name or ""
             if DEVICE_ADDR and d.address and d.address.lower() == DEVICE_ADDR.lower():
@@ -196,7 +194,6 @@ class BTLink:
         if not self.client.is_connected:
             raise RuntimeError("BLE connection failed")
 
-        # Subscribe to notifications
         await self.client.start_notify(TX_CHAR_UUID, self._on_notify)
         # Small delay to let CCCD settle on some stacks
         await asyncio.sleep(0.4)
@@ -237,12 +234,10 @@ class BTLink:
                 msg = ""
             self.last_received_message = "".join(c for c in msg if c.isprintable()).strip()
             
-            # Decrement in-flight counter when we receive an ACK (ok or fail)
             if self.last_received_message.lower() in ("ok", "fail"):
                 if self.instructions_in_flight > 0:
                     self.instructions_in_flight -= 1
                     print(f"RECEIVE::ACK pid:{self.last_received_packet_id} msg:{self.last_received_message} pending:{self.instructions_in_flight}")
-                # Push onto ack queue for windowed sender
                 with self._ack_lock:
                     self._ack_queue.append((self.last_received_packet_id, self.last_received_message.lower()))
         
@@ -251,8 +246,10 @@ class BTLink:
     async def _async_send_packet(self, payload: bytes):
         """
         Send packet and increment in-flight counter immediately.
-        No longer waits for ACK (fire-and-forget).
         Sliding window in send_gcode/send_lines handles throttling.
+
+        Automatically falls back from write-with-response to
+        write-without-response if the characteristic does not support it.
         """
         if not self.client or not self.client.is_connected:
             raise RuntimeError("BLE not connected")
@@ -260,84 +257,89 @@ class BTLink:
         packet_id = self._next_pid()
         packet = bytes([packet_id]) + payload
 
+        self.instructions_in_flight += 1
+
         try:
-            if not self.client.is_connected:
-                raise RuntimeError("BLE connection lost")
+            try:
+                await self.client.write_gatt_char(
+                    RX_CHAR_UUID,
+                    packet,
+                    response=self._write_with_response,
+                )
+            except Exception as e:
+                msg = str(e).lower()
+                if "not supported" in msg and self._write_with_response:
+                    print(
+                        "BLE write-with-response not supported for this characteristic, "
+                        "falling back to write-without-response."
+                    )
+                    self._write_with_response = False
+                    await self.client.write_gatt_char(
+                        RX_CHAR_UUID,
+                        packet,
+                        response=False,
+                    )
+                else:
+                    raise
 
-            # Increment in-flight BEFORE sending to enforce window strictly
-            self.instructions_in_flight += 1
-
-            # Use write-with-response on Raspberry Pi (BlueZ) for reliability
-            await self.client.write_gatt_char(RX_CHAR_UUID, packet, response=True)
-            print(f"SEND::QUEUED pid:{packet_id} cmd:{payload.decode(errors='ignore').strip()} pending:{self.instructions_in_flight}")
+            print(
+                f"SEND::QUEUED pid:{packet_id} "
+                f"cmd:{payload.decode(errors='ignore').strip()} "
+                f"pending:{self.instructions_in_flight}"
+            )
 
         except Exception as e:
             print(f"BLE Error sending packet {packet_id}: {e}")
-            # Roll back in-flight counter on send failure
             if self.instructions_in_flight > 0:
                 self.instructions_in_flight -= 1
-            if "not supported" in str(e).lower() or "connection" in str(e).lower():
-                raise
-            await asyncio.sleep(ERROR_COOLDOWN_S)
+            raise
 
-    # ---------------- Windowed sending with dynamic correction ----------------
+
     def send_gcode_windowed(
         self,
         gcode_text: str,
         window_size: int = 5,
-        on_head_executed = None,
-        correction_cb = None,
+        on_head_executed=None,
+        correction_cb=None,
         exec_timeout_s: float = 30.0,
     ) -> None:
-        """
-        Stream G-code with a sliding window of motion instructions. Each ACK
-        (ok/fail) closes the window by one. After the head line executes, can
-        inject correction lines (from CV) before sending subsequent moves.
-
-        correction_cb(head_pid, head_line, next_line) -> [new_lines]
-          Return list of G-code lines to insert immediately after the head.
-        """
         if not gcode_text:
             return
         if not self.client or not self.client.is_connected:
             raise RuntimeError("Not connected to BLE device")
 
-        # Prepare lines
         raw_lines = [
-            ln.strip() for ln in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            ln.strip()
+            for ln in gcode_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         ]
         lines = [ln for ln in raw_lines if ln and not ln.startswith(";")]
         if not lines:
             return
 
-        pending = lines[:]  # queue of lines left to send (including corrections inserted)
-        inflight: list[tuple[int, str]] = []  # (pid, line)
-        start_time = time.time()
+        pending = lines[:]
+        inflight: list[tuple[int, str]] = []
+        last_ack_time = time.time()
 
         def _send_line(line: str):
-            # Block until window has space (instructions_in_flight < window_size)
+            nonlocal inflight
             while self.instructions_in_flight >= window_size:
                 time.sleep(0.01)
-            data = (line + "\n").encode("utf-8")
-            # send
-            self._run(self._async_send_packet(data))
-            pid_used = self.packet_id_counter  # last assigned by _next_pid inside async send
+            payload = (line + "\n").encode("utf-8")
+            self._run(self._async_send_packet(payload))
+            pid_used = self.packet_id_counter
             inflight.append((pid_used, line))
             return pid_used
 
-        # Prime initial window
         while pending and len(inflight) < window_size:
             _send_line(pending.pop(0))
 
-        # Main loop
         while pending or inflight:
-            # Timeout check
-            if (time.time() - start_time) > exec_timeout_s:
+            now = time.time()
+            if now - last_ack_time > exec_timeout_s:
                 raise TimeoutError("Execution timed out waiting for ACKs")
 
             ack_pid = None
             ack_msg = None
-            # Pull ack if available
             with self._ack_lock:
                 if self._ack_queue:
                     ack_pid, ack_msg = self._ack_queue.pop(0)
@@ -346,40 +348,37 @@ class BTLink:
                 time.sleep(0.01)
                 continue
 
-            # Match ACK to earliest inflight if pid matches or pid appears there
-            matched_index = None
+            last_ack_time = now
+
+            matched_idx = None
             for idx, (pid, line) in enumerate(inflight):
                 if pid == ack_pid:
-                    matched_index = idx
+                    matched_idx = idx
                     break
-            # Fallback: assume head executed
-            if matched_index is None:
-                matched_index = 0 if inflight else None
+            if matched_idx is None and inflight:
+                matched_idx = 0
 
-            if matched_index is not None:
-                head_pid, head_line = inflight.pop(matched_index)
-                # Invoke callback for executed head
-                if on_head_executed:
-                    try:
-                        on_head_executed(head_pid, head_line, ack_msg)
-                    except Exception as e:
-                        print(f"on_head_executed error: {e}")
-                # Inject corrections before sending next move(s)
-                if correction_cb:
-                    next_line = pending[0] if pending else None
-                    try:
-                        new_lines = correction_cb(head_pid, head_line, next_line)
-                    except Exception as e:
-                        print(f"correction_cb error: {e}")
-                        new_lines = []
-                    if new_lines:
-                        # Insert at front of pending in order
-                        print(f"CORR::INJECT after pid:{head_pid} inserting {len(new_lines)} line(s): {new_lines}")
-                        for nl in reversed(new_lines):
-                            pending.insert(0, nl.strip())
-                # Send more to fill window
-                while pending and len(inflight) < window_size:
-                    _send_line(pending.pop(0))
+            if matched_idx is None:
+                continue
 
-        # Done
-        return
+            head_pid, head_line = inflight.pop(matched_idx)
+
+            if on_head_executed:
+                try:
+                    on_head_executed(head_pid, head_line, ack_msg or "")
+                except Exception as e:
+                    print(f"on_head_executed error: {e}")
+
+            if correction_cb:
+                next_line = pending[0] if pending else None
+                try:
+                    new_lines = correction_cb(head_pid, head_line, next_line)
+                except Exception as e:
+                    print(f"correction_cb error: {e}")
+                    new_lines = []
+                if new_lines:
+                    for nl in reversed(new_lines):
+                        pending.insert(0, nl.strip())
+
+            while pending and len(inflight) < window_size:
+                _send_line(pending.pop(0))

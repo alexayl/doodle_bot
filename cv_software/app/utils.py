@@ -62,6 +62,7 @@ class Metrics:
         self.valid_frames = 0
         self.total_frames = 0
         self.uptime_pct = 0.0
+        self.count = 0
 
 
     def note(self, valid: bool, t_proc_s: float):

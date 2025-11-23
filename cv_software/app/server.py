@@ -32,13 +32,12 @@ PATHFINDING_DIR = os.getenv(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "pathfinding")),
 )
 STREAM_JPEG_QUALITY = 75
-# Bounds margin configuration: use centralized cv_core values
-# Note: environment overrides should be handled in cv_core
+
 
 # Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
 PATH_CANVAS_SIZE = (
-    float(os.getenv("PATH_CANVAS_WIDTH", "300")),
-    float(os.getenv("PATH_CANVAS_HEIGHT", "250")),
+    float(os.getenv("PATH_CANVAS_WIDTH", "1140")),
+    float(os.getenv("PATH_CANVAS_HEIGHT", "1460")),
 )
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
@@ -391,50 +390,72 @@ def _home_bot(
     print("HOME FAIL: timeout")
     return False
 
-
 def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], window_size: int = 5):
     """Send G-code with real-time CV correction using centralized PathCorrectionEngine."""
-    # Reset correction engine for new path
     cvp.correction.reset()
-    
-    def correction_callback(head_pid: int, head_line: str, next_line: str) -> List[str]:
-        """Delegate to centralized correction engine."""
+
+    def correction_callback(head_pid: int, head_line: str, next_line: Optional[str]) -> List[str]:
         if not RUN.active:
             return []
-        
+
         current_idx = RUN.follower.index()
-        next_is_g1 = next_line.strip().startswith("G1")
-        
+        next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
+
         correction = cvp.correction.compute_correction(
             waypoints=fitted_wps,
             current_index=current_idx,
-            next_is_g1=next_is_g1
+            next_is_g1=next_is_g1,
         )
-        
         if correction is None:
             return []
-        
+
         sx, sy = correction
         return [f"G1 X{sx} Y{sy}"]
-    
+
     def on_head_executed(head_pid: int, head_line: str, ack_msg: str):
-        """Update PathFollower with current pose when commands execute."""
-        # Update PathFollower's waypoint tracking based on current position
         pose = cvp.get_pose_mm()
-        if pose and RUN.active:
-            reached, deviation = RUN.follower.update_and_check_reached(pose)
-            if reached:
-                print(f"WAYPOINT_REACHED: advanced to {RUN.follower.index()}/{RUN.follower.total()}")
-    
-    # Send with windowed flow control and CV correction
+        if not pose or not RUN.active:
+            return
+
+        try:
+            reached, dev_mm = RUN.follower.update_and_check_reached(pose)
+        except Exception as e:
+            print(f"[FOLLOWER] update error: {e}")
+            return
+
+        if dev_mm is not None:
+            dev_mm = float(dev_mm)
+            cvp.correction.log_deviation(dev_mm)
+            if cvp.correction.correction_count % 10 == 0:
+                rms = cvp.correction.rms_deviation()
+                print(f"[DEVIATION] inst={dev_mm:.2f}mm RMS={rms:.2f}mm")
+
+        if reached:
+            print(f"WAYPOINT_REACHED: {RUN.follower.index()}/{RUN.follower.total()}")
+
     bt.send_gcode_windowed(
         firmware_gcode,
         window_size=window_size,
         correction_cb=correction_callback,
-        on_head_executed=on_head_executed
+        on_head_executed=on_head_executed,
     )
+def _assert_fitted_in_bounds(fitted):
+    bounds = cvp.get_board_bounds_mm()
+    if not bounds:
+        raise RuntimeError("Board bounds not available")
+    min_x, min_y, max_x, max_y = bounds
 
-def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(575, 730)) -> str:
+    for i, wp in enumerate(fitted):
+        x = wp.x_mm
+        y = wp.y_mm
+        if not (min_x <= x <= max_x and min_y <= y <= max_y):
+            raise RuntimeError(
+                f"Waypoint {i} out of bounds: ({x:.1f},{y:.1f}) "
+                f"safe=({min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f})"
+            )
+
+
+def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800, 400)) -> str:
     """Run the pathfinding stack and write G-code next to the uploaded image."""
     if PATHFINDING_DIR not in sys.path:
         sys.path.insert(0, PATHFINDING_DIR)
@@ -555,7 +576,30 @@ def _cv_worker():
 
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
+        # --- METRIC PRINTS -----------------------------------------------------
+        if MET.count % 676767 == 0:
+            median_lat_ms = MET.median_latency_ms()
+            hz = MET.rate_hz()
+            uptime = MET.uptime_pct
 
+            st = cvp.get_state()
+            conf = st.get("board_confidence", None)
+            calibrated = st["calibrated"]
+            if conf == 0:
+                calibrated = False
+            print(
+                f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
+                f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
+                f"board conf={conf if conf is not None else 'NA'}, calibrated={calibrated}"
+            )
+
+            # Auto-recalibration check
+            if conf is not None and conf < 0.6:
+                print("[METRICS] WARNING: marker confidence < 0.6 → reinitializing calibration")
+                try:
+                    cvp.calibrate_board(frame)
+                except Exception:
+                    print("[METRICS] ERROR: failed to reset calibration")
         time.sleep(0.004)
 
 def _ensure_cv_thread():
@@ -644,22 +688,23 @@ def erase():
             error = "No erase path found in pathfinding directory."
         else:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
+            _assert_fitted_in_bounds(fitted)
             if not fitted:
                 error = "Board not calibrated yet."
             else:
                 # Home the bot to starting position first
-                if not _home_bot():
-                    error = "Failed to home bot to starting position"
-                else:
-                    try:
-                        gcode_str = _read_gcode_text("erase")
+                # if not _home_bot():
+                #     error = "Failed to home bot to starting position"
+                # else:
+                try:
+                    gcode_str = _read_gcode_text("erase")
+                
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)
                     
-                        firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)
-                        
-                        # Send with CV correction enabled
-                        _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
-                    except Exception as e:
-                        error = f"Failed to send G-code: {e}"
+                    # Send with CV correction enabled
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
 
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
@@ -693,7 +738,7 @@ def draw():
             try:
                 base = os.path.splitext(fname)[0]
                 gcode_path = os.path.join("uploads", f"{base}.gcode")
-                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(575, 730))
+                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(800, 400))
                 ops = load_gcode_file(gcode_path)
                 raw_norm = _ops_to_normalized_wps(ops)
             except Exception as e:
@@ -708,21 +753,24 @@ def draw():
 
         if raw_norm:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
+            _assert_fitted_in_bounds(fitted)
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
             else:
-                if not _home_bot():
-                    error = "Failed to home bot to starting position"
-                else:
-                    # Send raw G-code to MCU (use generated file if present, else named fallback)
-                    try:
-                        src_for_gcode = gcode_path if gcode_path else "draw"
-                        gcode_str = _read_gcode_text(src_for_gcode)
-                    
-                        firmware_gcode = cvp.build_firmware_gcode(gcode_str, canvas_size=PATH_CANVAS_SIZE)                    
-                        _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
-                    except Exception as e:
-                        error = f"Failed to send G-code: {e}"
+                # if not _home_bot():
+                #     error = "Failed to home bot to starting position"
+                # else:
+                #     # Send raw G-code to MCU (use generated file if present, else named fallback)
+                try:
+                    src_for_gcode = gcode_path if gcode_path else "draw"
+                    gcode_str = _read_gcode_text(src_for_gcode)
+                    print(f"Sending G-code from {src_for_gcode}...")
+                
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)     
+                    print(f"Built firmware G-code with {len(firmware_gcode.splitlines())} lines.")              
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
 
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
@@ -796,7 +844,6 @@ def test_send():
         if not cvp.get_state()["calibrated"]:
             return {"error": "Board not calibrated - wait for calibration to lock"}, 400
         
-        # Trigger scale calculation and board size logging
         board_size = cvp.board_size_mm()
         if not board_size:
             return {"error": "No board scale available - robot markers not detected"}, 400
@@ -808,7 +855,6 @@ def test_send():
             print(f"TEST_SEND: Board {board_size[0]:.1f}mm × {board_size[1]:.1f}mm, margins={margin:.1f}mm")
             print(f"TEST_SEND: Safe zone ({min_x+margin:.1f},{min_y+margin:.1f}) to ({max_x-margin:.1f},{max_y-margin:.1f})")
         
-        # Just normalize, don't scale (test files should already be in mm)
         normalized = convert_pathfinding_gcode(gcode_str)
         
         print(f"Sending test G-code from {gcode_file}:")
@@ -825,7 +871,7 @@ def test_send():
 def _shutdown():
     try:
         RUN.stop()
-        bt.close()  # Use close() instead of stop()
+        bt.close()
     except Exception:
         pass
     cam = get_cam()
