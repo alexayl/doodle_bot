@@ -43,12 +43,12 @@ def load_gcode_file(path: str) -> List[Tuple]:
             ops.append(("pen", False))  # pen up
             continue
         # M280 P0 S0 = down, M280 P0 S90 = up
-        if u.startswith("M280"):
-            if "S0" in u or "S 0" in u:
-                ops.append(("pen", True))
-            elif "S90" in u or "S 90" in u:
-                ops.append(("pen", False))
-            continue
+        # if u.startswith("M280"):
+        #     if "S0" in u or "S 0" in u:
+        #         ops.append(("pen", True))
+        #     elif "S90" in u or "S 90" in u:
+        #         ops.append(("pen", False))
+        #     continue
 
         if not u.startswith(("G0", "G1")):
             continue
@@ -129,7 +129,6 @@ def convert_pathfinding_gcode(gcode_text: str) -> str:
             src_has_g90 = True
             continue  # firmware doesn't accept G90; we'll convert to relative
 
-        # pass pen servo through
         if u.startswith("M280"):
             # out_lines.append(line)
             continue
