@@ -53,7 +53,7 @@ run-sim: build-sim
 #  ESP32-S3
 # ------------------
 
-build-esp32: _verify_workspace
+build-esp32: _verify_workspace clean
   west build \
     -b "{{ESP_BOARD}}" \
     -d build \
