@@ -34,12 +34,6 @@ PATHFINDING_DIR = os.getenv(
 STREAM_JPEG_QUALITY = 75
 
 
-# Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
-PATH_CANVAS_SIZE = (
-    float(os.getenv("PATH_CANVAS_WIDTH", "1140")),
-    float(os.getenv("PATH_CANVAS_HEIGHT", "1460")),
-)
-
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
 
@@ -173,11 +167,12 @@ def _wait_for_pose(timeout_s: float) -> Optional[tuple]:
             return pose
         time.sleep(0.05)
     return None
+
+
 def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
     """
-    Detect firmware axis direction for +X and +Y.
-    Performs small test moves, confirms physical movement via CV,
-    and sets AXIS_SIGN based on real movement.
+    Detect firmware axis direction for +X and +Y using simple BLE sends.
+    Uses G1 moves and observes motion via CV, then sets AXIS_SIGN.
     """
 
     print("AXIS DETECT: Starting axis detection")
@@ -191,12 +186,13 @@ def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
 
     # ------------------ Detect X sign ------------------
     print("AXIS DETECT: probing +X ...")
-    bt.send_gcode_windowed(f"G1 X{int(move_mm)} Y0\n", 1)
+    bt.send_gcode(f"G1 X{int(move_mm)} Y0")
     p2 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
 
     if not p2:
         print("AXIS DETECT WARNING: No movement detected on +X probe. Assuming +X is forward.")
         AXIS_SIGN["X"] = +1
+        x1, y1 = x0, y0
     else:
         (x1, y1), _, _ = p2
         if x1 > x0:
@@ -207,8 +203,8 @@ def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
             print("AXIS DETECT: +X decreases X → AXIS_SIGN[X] = -1")
 
     # Move back to original X
-    bt.send_gcode_windowed(f"G1 X{-AXIS_SIGN['X'] * int(move_mm)} Y0\n", 1)
-    _wait_for_pose_change((x1 if p2 else x0, y1 if p2 else y0), min_mm=1.0, timeout_s=timeout_s)
+    bt.send_gcode(f"G1 X{-AXIS_SIGN['X'] * int(move_mm)} Y0")
+    _wait_for_pose_change((x1, y1), min_mm=1.0, timeout_s=timeout_s)
 
     # ------------------ Detect Y sign ------------------
     pose = _wait_for_pose(2.0)
@@ -218,12 +214,13 @@ def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
     (x0, y0), _, _ = pose
 
     print("AXIS DETECT: probing +Y ...")
-    bt.send_gcode_windowed(f"G1 X0 Y{int(move_mm)}\n", 1)
+    bt.send_gcode(f"G1 X0 Y{int(move_mm)}")
     p3 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
 
     if not p3:
         print("AXIS DETECT WARNING: No movement detected on +Y probe. Assuming +Y is forward.")
         AXIS_SIGN["Y"] = +1
+        x2, y2 = x0, y0
     else:
         (x2, y2), _, _ = p3
         if y2 > y0:
@@ -234,16 +231,20 @@ def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
             print("AXIS DETECT: +Y decreases Y → AXIS_SIGN[Y] = -1")
 
     # Move back to original Y
-    bt.send_gcode_windowed(f"G1 X0 Y{-AXIS_SIGN['Y'] * int(move_mm)}\n", 1)
-    _wait_for_pose_change((x2 if p3 else x0, y2 if p3 else y0), min_mm=1.0, timeout_s=timeout_s)
+    bt.send_gcode(f"G1 X0 Y{-AXIS_SIGN['Y'] * int(move_mm)}")
+    _wait_for_pose_change((x2, y2), min_mm=1.0, timeout_s=timeout_s)
 
     print(f"AXIS DETECT COMPLETE: AXIS_SIGN = {AXIS_SIGN}")
     return True
 
+
 # -----------------------------------------------------------------------------#
 # G-code helpers
 # -----------------------------------------------------------------------------#
-def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
+def _ops_to_normalized_wps(
+    ops: List[tuple],
+    return_origin: bool = False,
+) -> List[Waypoint] | tuple[List[Waypoint], tuple[float, float]]:
     """
     Convert ("move", dx, dy) incremental ops to [0..1] normalized waypoints.
     """
@@ -253,7 +254,8 @@ def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
         if not op:
             continue
         if op[0] == "move":
-            x += float(op[1]); y += float(op[2])
+            x += float(op[1])
+            y += float(op[2])
             pts.append((x, y))
     if not pts:
         return []
@@ -261,16 +263,23 @@ def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
     w = max(maxx - minx, 1e-6)
     h = max(maxy - miny, 1e-6)
+    origin_norm = ((0.0 - minx) / w, (0.0 - miny) / h)
 
     out: List[Waypoint] = []
     for px, py in pts:
         nx = (px - minx) / w
-        ny0 = (py - miny) / h
-        ny = ny0
+        ny = (py - miny) / h
         out.append(Waypoint(x_mm=float(nx), y_mm=float(ny)))
+
+    if return_origin:
+        return out, origin_norm
     return out
 
-def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
+
+def _load_named_gcode_normalized(
+    name: str,
+    return_origin: bool = False,
+) -> List[Waypoint] | tuple[List[Waypoint], tuple[float, float]]:
     bases = [
         os.path.join(PATHFINDING_DIR, f"{name}.gcode"),
         os.path.join(PATHFINDING_DIR, "gcode", f"{name}.gcode"),
@@ -284,8 +293,9 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
             except Exception:
                 pass
     if not ops:
-        return []
-    return _ops_to_normalized_wps(ops)
+        return ([], (0.0, 0.0)) if return_origin else []
+    norm = _ops_to_normalized_wps(ops, return_origin=return_origin)
+    return norm
 
 def _home_bot(
     inset_mm: float = 20.0,
@@ -363,9 +373,9 @@ def _home_bot(
             return True
 
         sx, sy = steps
-        cmd = f"G1 X{sx} Y{sy}\n"
-        print(f"HOME → {cmd.strip()}")
-        bt.send_gcode_windowed(cmd, 1)
+        cmd = f"G1 X{sx} Y{sy}"
+        print(f"HOME → {cmd}")
+        bt.send_gcode(cmd)
 
         before = (cx, cy)
         p2 = _wait_for_pose_change(before, 1.5, 3.5)
@@ -382,13 +392,24 @@ def _home_bot(
     print("HOME FAIL: timeout")
     return False
 
-def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], window_size: int = 5):
+def _send_with_cv_correction(
+    firmware_gcode: str,
+    fitted_wps: List[Waypoint],
+    window_size: int = 1,
+):
     """Send G-code with real-time CV correction using centralized PathCorrectionEngine."""
+    path_wps = _as_waypoints(fitted_wps)
+    if not path_wps:
+        raise RuntimeError("No fitted waypoints available for correction run.")
+
+    RUN.load(path_wps)
+    RUN.start()
     cvp.correction.reset()
 
     def correction_callback(head_pid: int, head_line: str, next_line: Optional[str]) -> List[str]:
         if not RUN.active:
             return []
+        print("[CORRECTION CALLBACK] called")
 
         current_idx = RUN.follower.index()
         next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
@@ -398,10 +419,18 @@ def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], wi
             current_index=current_idx,
             next_is_g1=next_is_g1,
         )
+        print(f"[CORRECTION CALLBACK] correction={correction}")
         if correction is None:
             return []
 
-        sx, sy = correction
+        bx, by = correction
+        steps = _map_board_to_robot_steps(bx, by, min_step=1)
+        if steps is None:
+            return []
+
+        sx, sy = steps
+        if sx == 0 and sy == 0:
+            return []
         return [f"G1 X{sx} Y{sy}"]
 
     def on_head_executed(head_pid: int, head_line: str, ack_msg: str):
@@ -425,12 +454,25 @@ def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], wi
         if reached:
             print(f"WAYPOINT_REACHED: {RUN.follower.index()}/{RUN.follower.total()}")
 
-    bt.send_gcode_windowed(
-        firmware_gcode,
-        window_size=window_size,
-        correction_cb=correction_callback,
-        on_head_executed=on_head_executed,
-    )
+    try:
+        bt.send_gcode_windowed(
+            firmware_gcode,
+            window_size=window_size,
+            correction_cb=correction_callback,
+            on_head_executed=on_head_executed,
+        )
+    finally:
+        RUN.stop()
+
+
+
+def _first_waypoint_pos(wps: List[Waypoint]) -> Optional[Tuple[float, float]]:
+    if not wps:
+        return None
+    first = wps[0]
+    print(f"FIRST_WP: ({first.x_mm:.1f},{first.y_mm:.1f})")
+    return (first.x_mm, first.y_mm)
+
 def _assert_fitted_in_bounds(fitted):
     bounds = cvp.get_board_bounds_mm()
     if not bounds:
@@ -673,7 +715,7 @@ def erase():
             RUN.stop()
             return redirect(url_for("erase"))
 
-        raw_norm = _load_named_gcode_normalized("erase")
+        raw_norm, norm_origin = _load_named_gcode_normalized("erase", return_origin=False)
         if not raw_norm:
             error = "No erase path found in pathfinding directory."
         else:
@@ -688,16 +730,19 @@ def erase():
                 # else:
                 try:
                     gcode_str = _read_gcode_text("erase")
-                
-                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)
+                    start_pos = _first_waypoint_pos(fitted)
+                    firmware_gcode = cvp.build_firmware_gcode(
+                        gcode_str,
+                        start_pos=start_pos,
+                        fitted_wps=fitted,
+                        norm_origin=norm_origin,
+                    )
                     
                     # Send with CV correction enabled
-                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=3)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
-                RUN.load(_as_waypoints(fitted))
-                RUN.start()
                 msg = f"Erase queued with {len(fitted)} vertices and sent over BLE with CV correction."
 
         return render_template("index.html", page="erase", msg=msg, error=error)
@@ -718,6 +763,7 @@ def draw():
 
         uploaded_file = request.files.get("file")
         raw_norm: List[Waypoint] = []
+        norm_origin: Optional[Tuple[float, float]] = None
         gcode_path: Optional[str] = None
 
         if uploaded_file and uploaded_file.filename:
@@ -730,16 +776,17 @@ def draw():
                 gcode_path = os.path.join("uploads", f"{base}.gcode")
                 gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(800, 400))
                 ops = load_gcode_file(gcode_path)
-                raw_norm = _ops_to_normalized_wps(ops)
+                raw_norm, norm_origin = _ops_to_normalized_wps(ops, return_origin=True)
             except Exception as e:
                 raw_norm = []
                 error = f"Image conversion failed: {e}"
 
         if not raw_norm:
-            fallback = _load_named_gcode_normalized("draw")
-            if not fallback and error is None:
+            fallback_norm, fallback_origin = _load_named_gcode_normalized("draw", return_origin=False)
+            if not fallback_norm and error is None:
                 error = "No draw path found and no valid uploaded image."
-            raw_norm = fallback
+            raw_norm = fallback_norm
+            norm_origin = fallback_origin
 
         if raw_norm:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
@@ -756,14 +803,18 @@ def draw():
                     gcode_str = _read_gcode_text(src_for_gcode)
                     print(f"Sending G-code from {src_for_gcode}...")
                 
-                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)     
+                    start_pos = _first_waypoint_pos(fitted)
+                    firmware_gcode = cvp.build_firmware_gcode(
+                        gcode_str,
+                        start_pos=start_pos,
+                        fitted_wps=fitted,
+                        norm_origin=norm_origin,
+                    )
                     print(f"Built firmware G-code with {len(firmware_gcode.splitlines())} lines.")              
-                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=3)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
-                RUN.load(_as_waypoints(fitted))
-                RUN.start()
                 msg = f"Draw queued with {len(fitted)} vertices and sent over BLE with CV correction."
 
         return render_template("index.html", page="draw",

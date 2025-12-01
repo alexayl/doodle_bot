@@ -25,6 +25,7 @@ CV_MIN_ERROR_MM = float(os.getenv("CV_MIN_ERROR_MM", "2.5"))
 CV_LOOKAHEAD_COUNT = int(os.getenv("CV_LOOKAHEAD_COUNT", "2"))
 CV_CROSS_TRACK_GAIN = float(os.getenv("CV_CROSS_TRACK_GAIN", "2.0"))
 CV_ADAPTIVE_STEP = bool(int(os.getenv("CV_ADAPTIVE_STEP", "1")))
+CV_MAX_CORRECTION_MM = float(os.getenv("CV_MAX_CORRECTION_MM", "8.0"))
 
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
@@ -298,18 +299,18 @@ class BoardCalibrator:
 
         if reproj > _REPROJ_GOOD_PX:
             if not hasattr(self, "_reproj_log") or time.time() - self._reproj_log > 2.5:
-                print(
-                    f"[BOARD_CAL] High reprojection error: {reproj:.3f}px "
-                    f"(threshold={_REPROJ_GOOD_PX})"
-                )
+                # print(
+                #     f"[BOARD_CAL] High reprojection error: {reproj:.3f}px "
+                #     f"(threshold={_REPROJ_GOOD_PX})"
+                # )
                 self._reproj_log = time.time()
 
         if cond_H > _COND_WARN_LIMIT:
             if not hasattr(self, "_cond_log") or time.time() - self._cond_log > 3.0:
-                print(
-                    f"[BOARD_CAL] Homography condition number high: {cond_H:.1e}, "
-                    f"warn_limit={_COND_WARN_LIMIT}, hard_limit={_COND_HARD_LIMIT}"
-                )
+                # print(
+                #     f"[BOARD_CAL] Homography condition number high: {cond_H:.1e}, "
+                #     f"warn_limit={_COND_WARN_LIMIT}, hard_limit={_COND_HARD_LIMIT}"
+                # )
                 self._cond_log = time.time()
 
         accept = not (reproj > _REPROJ_GOOD_PX and cond_H > _COND_HARD_LIMIT)
@@ -375,25 +376,25 @@ class BoardCalibrator:
         )
         self.pose_fresh = True
 
-        try:
-            img_corner_log = (
-                f"[BOARD_CAL] Image corners (px): "
-                f"TL=({tl[0]:.1f},{tl[1]:.1f}), "
-                f"TR=({tr[0]:.1f},{tr[1]:.1f}), "
-                f"BR=({br[0]:.1f},{br[1]:.1f}), "
-                f"BL=({bl[0]:.1f},{bl[1]:.1f})"
-            )
-            board_corner_log = (
-                f"[BOARD_CAL] Board corners (mm): "
-                f"TL=(0.0,{KNOWN_BOARD_HEIGHT_MM:.1f}), "
-                f"TR=({KNOWN_BOARD_WIDTH_MM:.1f},{KNOWN_BOARD_HEIGHT_MM:.1f}), "
-                f"BR=({KNOWN_BOARD_WIDTH_MM:.1f},0.0), "
-                f"BL=(0.0,0.0)"
-            )
-            print(img_corner_log)
-            print(board_corner_log)
-        except Exception:
-            pass
+        # try:
+        #     img_corner_log = (
+        #         f"[BOARD_CAL] Image corners (px): "
+        #         f"TL=({tl[0]:.1f},{tl[1]:.1f}), "
+        #         f"TR=({tr[0]:.1f},{tr[1]:.1f}), "
+        #         f"BR=({br[0]:.1f},{br[1]:.1f}), "
+        #         f"BL=({bl[0]:.1f},{bl[1]:.1f})"
+        #     )
+        #     board_corner_log = (
+        #         f"[BOARD_CAL] Board corners (mm): "
+        #         f"TL=(0.0,{KNOWN_BOARD_HEIGHT_MM:.1f}), "
+        #         f"TR=({KNOWN_BOARD_WIDTH_MM:.1f},{KNOWN_BOARD_HEIGHT_MM:.1f}), "
+        #         f"BR=({KNOWN_BOARD_WIDTH_MM:.1f},0.0), "
+        #         f"BL=(0.0,0.0)"
+        #     )
+        #     print(img_corner_log)
+        #     print(board_corner_log)
+        # except Exception:
+        #     pass
 
         return self.board_pose
 
@@ -535,17 +536,17 @@ class BotTracker:
             baseline_mm=baseline,
             confidence=conf,
         )
-        if has_marker_0 and has_marker_1:
-            print(f"BOT_TRACK: BOT located at {pose}")
+        # if has_marker_0 and has_marker_1:
+        #     print(f"BOT_TRACK: BOT located at {pose}")
         self._last_valid_pose = (pose, time.time())
         return pose
 
 
 class PathCorrectionEngine:
     """
-    Computes small, rate-limited correction steps based on cross-track error
-    relative to the current segment of the path. Outputs (X, Y) in the robot
-    frame (forward, left), which we send directly as G-code relative moves.
+    Computes bounded board-frame correction deltas based on cross-track error
+    relative to the current segment of the path. The server converts these
+    deltas into safe robot-frame steps via _map_board_to_robot_steps().
     """
 
     def __init__(self, cvp: "CVPipeline"):
@@ -553,6 +554,11 @@ class PathCorrectionEngine:
         self.last_correction_time = 0.0
         self.correction_count = 0
         self.min_correction_interval = 1.0 / CV_CORRECTION_RATE_HZ
+        self.cross_track_gain = CV_CROSS_TRACK_GAIN
+        self.min_error_mm = CV_MIN_ERROR_MM
+        self.lookahead = max(1, CV_LOOKAHEAD_COUNT)
+        self.adaptive_step = CV_ADAPTIVE_STEP
+        self.max_correction_mm = CV_MAX_CORRECTION_MM
 
         # Deviation history for RMS stats (filled externally)
         self.dev_history: list[float] = []
@@ -586,21 +592,26 @@ class PathCorrectionEngine:
         if not next_is_g1:
             return None
 
-        if current_index >= len(waypoints) - 1:
+        if current_index >= len(waypoints):
             return None
 
         pose = self._pose()
         if pose is None:
             return None
-        cx, cy, heading, conf = pose
+        cx, cy, _, conf = pose
 
         # low-confidence pose
         if conf < 0.60:
             return None
 
+        start_idx = min(current_index, len(waypoints) - 1)
+        end_idx = min(len(waypoints) - 1, start_idx + self.lookahead)
+        if end_idx == start_idx:
+            return None
+
         try:
-            x1, y1 = self._wp_xy(waypoints[current_index])
-            x2, y2 = self._wp_xy(waypoints[current_index + 1])
+            x1, y1 = self._wp_xy(waypoints[start_idx])
+            x2, y2 = self._wp_xy(waypoints[end_idx])
         except Exception:
             return None
 
@@ -610,43 +621,52 @@ class PathCorrectionEngine:
         if seg_len < 1e-6:
             return None
 
-
         rel_x = cx - x1
         rel_y = cy - y1
         cross = (rel_y * seg_dx - rel_x * seg_dy) / seg_len
-        err_mm = abs(cross)
-
-        if err_mm < 1.0:
+        if abs(cross) < self.min_error_mm:
             return None
 
         nx = -seg_dy / seg_len
         ny =  seg_dx / seg_len
-        
-        gain = 0.4          # stable gain
-        max_corr = 6.0      # board-frame clamp
 
-        corr = -gain * cross
-        corr = max(-max_corr, min(max_corr, corr))
+        corr_mm = -self.cross_track_gain * cross
+        if self.adaptive_step:
+            # scale aggressiveness based on how large the deviation is
+            window = max(self.min_error_mm * 4.0, 1.0)
+            scale = min(1.0, abs(cross) / window)
+            corr_mm *= max(0.35, scale)
 
-        dx_board = corr * nx
-        dy_board = corr * ny
+        corr_mm = max(-self.max_correction_mm, min(self.max_correction_mm, corr_mm))
 
-        cos_h = math.cos(heading)
-        sin_h = math.sin(heading)
+        dx_board = corr_mm * nx
+        dy_board = corr_mm * ny
 
-        fwd  =  dx_board * cos_h + dy_board * sin_h
-        left = -dx_board * sin_h + dy_board * cos_h
+        bounds = self.cvp.get_board_bounds_mm()
+        if bounds:
+            min_x, min_y, max_x, max_y = bounds
+            scale = 1.0
+            if abs(dx_board) > 1e-6:
+                if dx_board > 0:
+                    allowed = (max_x - cx) / dx_board
+                else:
+                    allowed = (min_x - cx) / dx_board
+                scale = min(scale, max(0.0, min(1.0, allowed)))
+            if abs(dy_board) > 1e-6:
+                if dy_board > 0:
+                    allowed = (max_y - cy) / dy_board
+                else:
+                    allowed = (min_y - cy) / dy_board
+                scale = min(scale, max(0.0, min(1.0, allowed)))
+            if scale <= 0.0:
+                return None
+            dx_board *= scale
+            dy_board *= scale
 
-        fwd  = max(-6.0, min(6.0, fwd))
-        left = max(-6.0, min(6.0, left))
-
-        sx = int(round(fwd))
-        sy = int(round(left))
-
-        if sx == 0 and sy == 0:
+        if abs(dx_board) < 1e-3 and abs(dy_board) < 1e-3:
             return None
 
-        return sx, sy
+        return dx_board, dy_board
 
 
     def log_deviation(self, d_mm: float) -> None:
@@ -785,63 +805,73 @@ class CVPipeline:
         safe_max_y = Hmm - margin
         return (safe_min_x, safe_min_y, safe_max_x, safe_max_y)
 
-    def fit_path_to_board(self, wps, margin_frac: float = 0.05):
-        def _fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
-            if not wps:
-                return []
-            Wmm, Hmm = board_mm
+    def _safe_board_rect(self, margin_frac: float = 0.10) -> Optional[tuple[float, float, float, float]]:
+        bounds = self.get_board_bounds_mm()
+        if not bounds:
+            return None
+        min_x, min_y, max_x, max_y = bounds
+        safe_w = max_x - min_x
+        safe_h = max_y - min_y
+        if safe_w <= 0 or safe_h <= 0:
+            return None
 
-            xs = [w.x_mm for w in wps]
-            ys = [w.y_mm for w in wps]
-            minx = min(xs)
-            maxx = max(xs)
-            miny = min(ys)
-            maxy = max(ys)
+        pad_x = margin_frac * 0.5 * safe_w
+        pad_y = margin_frac * 0.5 * safe_h
+        min_x2 = min_x + pad_x
+        max_x2 = max_x - pad_x
+        min_y2 = min_y + pad_y
+        max_y2 = max_y - pad_y
 
-            w_norm = max(maxx - minx, 1e-6)
-            h_norm = max(maxy - miny, 1e-6)
+        span_x = max_x2 - min_x2
+        span_y = max_y2 - min_y2
+        if span_x <= 0 or span_y <= 0:
+            return None
+        return (min_x2, min_y2, span_x, span_y)
 
-            target_w = (1.0 - 2 * margin_frac) * Wmm
-            target_h = (1.0 - 2 * margin_frac) * Hmm
-            scale = min(target_w / w_norm, target_h / h_norm)
-
-            cx_norm = 0.5 * (minx + maxx)
-            cy_norm = 0.5 * (miny + maxy)
-
-            cx_board = 0.5 * Wmm
-            cy_board = 0.5 * Hmm
-
-            out = []
-            for p in wps:
-                x_mm = (p.x_mm - cx_norm) * scale + cx_board
-                y_mm = (p.y_mm - cy_norm) * scale + cy_board
-
-                x_mm = max(margin_frac * Wmm, min(x_mm, (1.0 - margin_frac) * Wmm))
-                y_mm = max(margin_frac * Hmm, min(y_mm, (1.0 - margin_frac) * Hmm))
-
-                out.append(Waypoint(x_mm, y_mm))
-            return out
-
-        sz = self.board_size_mm()
-        if not sz:
+    def fit_path_to_board(self, wps: list[Waypoint], margin_frac: float = 0.10) -> list[Waypoint]:
+        """
+        Take normalized waypoints (0..1 in both axes) and map them into the
+        already-safe board bounds returned by get_board_bounds_mm().
+        margin_frac optionally shrinks inside those safe bounds.
+        """
+        if not wps:
             return []
 
-        if self.cal.board_pose is None:
-            print("PATH FITTING REJECTED: No board pose available.")
+        rect = self._safe_board_rect(margin_frac)
+        if rect is None:
+            print("PATH FITTING REJECTED: No usable board bounds available.")
             return []
 
-        if not getattr(self.cal, "calibration_locked", False):
-            print("PATH FITTING REJECTED: Calibration not locked yet.")
-            return []
+        min_x2, min_y2, span_x, span_y = rect
 
-        conf = getattr(self.cal.board_pose, "confidence", 1.0)
-        if conf < 0.30:
-            print(
-                "PATH FITTING WARNING: Board confidence low "
-                f"(confidence={conf:.2f}, recommended ≥0.30) - proceeding with locked homography."
-            )
+        out: list[Waypoint] = []
+        for p in wps:
+            # p.x_mm and p.y_mm are actually normalized [0,1] here
+            nx = float(p.x_mm)
+            ny = float(p.y_mm)
 
-        return _fit_path_to_board(wps, sz, margin_frac)
+            x_mm = min_x2 + nx * span_x
+            y_mm = min_y2 + ny * span_y
+
+            out.append(Waypoint(x_mm=x_mm, y_mm=y_mm))
+
+        return out
+
+    def map_normalized_point_to_board(
+        self,
+        nx: float,
+        ny: float,
+        margin_frac: float = 0.10,
+    ) -> Optional[tuple[float, float]]:
+        rect = self._safe_board_rect(margin_frac)
+        if rect is None:
+            return None
+        min_x2, min_y2, span_x, span_y = rect
+        nx = max(0.0, min(1.0, float(nx)))
+        ny = max(0.0, min(1.0, float(ny)))
+        x_mm = min_x2 + nx * span_x
+        y_mm = min_y2 + ny * span_y
+        return (x_mm, y_mm)
 
 
 
@@ -867,17 +897,95 @@ class CVPipeline:
         }
 
 
-    def build_firmware_gcode(self, gcode_text: str) -> str:
+    def build_firmware_gcode(
+        self,
+        gcode_text: str,
+        start_pos: Optional[Tuple[float, float]] = None,
+        fitted_wps: Optional[List[Waypoint]] = None,
+        norm_origin: Optional[Tuple[float, float]] = None,
+        margin_frac: float = 0.10,
+    ) -> str:
         bounds = self.get_board_bounds_mm()
         if bounds is None:
             raise ValueError("Board not calibrated – bounds unavailable")
 
         min_x, min_y, max_x, max_y = bounds
 
-        pos_x = 0.0
-        pos_y = 0.0
+        def _planar_anchor() -> Tuple[float, float]:
+            anchor = None
+            if norm_origin is not None:
+                anchor = self.map_normalized_point_to_board(norm_origin[0], norm_origin[1], margin_frac=margin_frac)
+            if anchor is None and start_pos is not None:
+                anchor = start_pos
+            if anchor is None and fitted_wps:
+                first = fitted_wps[0]
+                anchor = (first.x_mm, first.y_mm)
+            if anchor is None:
+                anchor = (min_x, min_y)
+            ax, ay = anchor
+            ax = min(max(ax, min_x), max_x)
+            ay = min(max(ay, min_y), max_y)
+            return ax, ay
+
+        if fitted_wps:
+            anchor = _planar_anchor()
+            path_points: List[Tuple[float, float]] = [anchor] + [
+                (float(wp.x_mm), float(wp.y_mm)) for wp in fitted_wps
+            ]
+            move_idx = 0
+            pos_x, pos_y = anchor
+            out_lines: List[str] = []
+
+            for raw in gcode_text.splitlines():
+                line = raw.strip()
+                if not line or line.startswith(";"):
+                    out_lines.append(raw)
+                    continue
+
+                upper = line.upper()
+                if not upper.startswith(("G0", "G1")):
+                    out_lines.append(raw)
+                    continue
+
+                if move_idx >= len(fitted_wps):
+                    continue
+
+                next_pt = path_points[move_idx + 1]
+                dx = next_pt[0] - pos_x
+                dy = next_pt[1] - pos_y
+                pos_x, pos_y = next_pt
+                move_idx += 1
+
+                dx_i = int(round(dx))
+                dy_i = int(round(dy))
+                if dx_i == 0 and dy_i == 0:
+                    continue
+
+                cmd = line.split()[0]
+                parts = [cmd]
+                if dx_i != 0:
+                    parts.append(f"X{dx_i}")
+                if dy_i != 0:
+                    parts.append(f"Y{dy_i}")
+                out_lines.append(" ".join(parts))
+
+            return "\n".join(out_lines)
+
+        # Legacy clamping fallback when path metadata unavailable
 
         out_lines = []
+        if start_pos is not None:
+            start_x, start_y = start_pos
+            if not (min_x <= start_x <= max_x and min_y <= start_y <= max_y):
+                raise ValueError(
+                    f"Start pos ({start_x:.1f},{start_y:.1f}) outside board bounds "
+                    f"({min_x:.1f}-{max_x:.1f},{min_y:.1f}-{max_y:.1f})"
+                )
+            pos_x = start_x
+            pos_y = start_y
+        else:
+            pos_x = 0.0
+            pos_y = 0.0
 
         for raw in gcode_text.splitlines():
             line = raw.strip()
@@ -904,12 +1012,13 @@ class CVPipeline:
 
             clamped_x = min(max(next_x, min_x), max_x)
             clamped_y = min(max(next_y, min_y), max_y)
+
             if (next_x != clamped_x) or (next_y != clamped_y):
-                raise RuntimeError(
-                    f"G-code move would exit board: "
-                    f"({next_x:.1f},{next_y:.1f}) "
+                print(
+                    f"[GCODE] Clamping move from ({next_x:.1f},{next_y:.1f}) "
+                    f"to ({clamped_x:.1f},{clamped_y:.1f}) "
                     f"safe=({min_x:.1f}-{max_x:.1f},{min_y:.1f}-{max_y:.1f})"
-            )
+                )
 
             actual_dx = clamped_x - pos_x
             actual_dy = clamped_y - pos_y
