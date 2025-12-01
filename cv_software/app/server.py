@@ -578,19 +578,19 @@ def _cv_worker():
             calibrated = st["calibrated"]
             if conf == 0:
                 calibrated = False
-            print(
-                f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
-                f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
-                f"board conf={conf if conf is not None else 'NA'}, calibrated={calibrated}"
-            )
+            # print(
+            #     f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
+            #     f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
+            #     f"board conf={conf if conf is not None else 'NA'}, calibrated={calibrated}"
+            # )
 
             # Auto-recalibration check
-            if conf is not None and conf < 0.6:
-                print("[METRICS] WARNING: marker confidence < 0.6 → reinitializing calibration")
-                try:
-                    cvp.calibrate_board(frame)
-                except Exception:
-                    print("[METRICS] ERROR: failed to reset calibration")
+            # if conf is not None and conf < 0.6:
+            #     print("[METRICS] WARNING: marker confidence < 0.6 → reinitializing calibration")
+            #     try:
+            #         cvp.calibrate_board(frame)
+            #     except Exception:
+            #         print("[METRICS] ERROR: failed to reset calibration")
         time.sleep(0.004)
 
 def _ensure_cv_thread():

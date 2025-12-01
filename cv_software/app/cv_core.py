@@ -11,7 +11,7 @@ from app.path_parse import (
     load_gcode_file,
     scale_gcode_to_board,
 )
-
+from app.control import Waypoint
 BOARD_MARGIN_MM = float(os.getenv("BOARD_MARGIN_MM", "67"))
 BOARD_MARGIN_FRAC = float(os.getenv("BOARD_MARGIN_FRAC", "0.20"))
 _POSE_ALPHA = 0.7
@@ -248,8 +248,6 @@ class BoardCalibrator:
         prev = self.board_pose
 
         if found < 3:
-            if prev is not None:
-                prev.confidence = conf_raw
             if not hasattr(self, '_last_reject_log') or time.time() - self._last_reject_log > 2.0:
                 print(f"Calibration: {found}/4 corners (need ≥3)")
                 self._last_reject_log = time.time()
@@ -345,15 +343,16 @@ class BoardCalibrator:
             accept = True
 
         if not accept:
-            if prev is not None:
-                prev.confidence = conf_raw
             if not hasattr(self, '_last_reject_reason_log') or time.time() - self._last_reject_reason_log > 3.0:
                 if rejection_reason:
                     print(f"Calibration rejected: {rejection_reason}")
                 self._last_reject_reason_log = time.time()
             return prev
 
-        conf_smooth = conf_raw
+        if prev is not None:
+            conf_smooth = max(float(conf_raw), float(prev.confidence))
+        else:
+            conf_smooth = float(conf_raw)
 
         if prev is None or not hasattr(self, '_calibrated_once'):
             print(f"[CALIBRATION] Homography updated and LOCKED. Board mapped to {KNOWN_BOARD_WIDTH_MM}mm × {KNOWN_BOARD_HEIGHT_MM}mm")
@@ -375,7 +374,29 @@ class BoardCalibrator:
             },
         )
         self.pose_fresh = True
+
+        try:
+            img_corner_log = (
+                f"[BOARD_CAL] Image corners (px): "
+                f"TL=({tl[0]:.1f},{tl[1]:.1f}), "
+                f"TR=({tr[0]:.1f},{tr[1]:.1f}), "
+                f"BR=({br[0]:.1f},{br[1]:.1f}), "
+                f"BL=({bl[0]:.1f},{bl[1]:.1f})"
+            )
+            board_corner_log = (
+                f"[BOARD_CAL] Board corners (mm): "
+                f"TL=(0.0,{KNOWN_BOARD_HEIGHT_MM:.1f}), "
+                f"TR=({KNOWN_BOARD_WIDTH_MM:.1f},{KNOWN_BOARD_HEIGHT_MM:.1f}), "
+                f"BR=({KNOWN_BOARD_WIDTH_MM:.1f},0.0), "
+                f"BL=(0.0,0.0)"
+            )
+            print(img_corner_log)
+            print(board_corner_log)
+        except Exception:
+            pass
+
         return self.board_pose
+
 
 
 class BotTracker:
@@ -764,57 +785,64 @@ class CVPipeline:
         safe_max_y = Hmm - margin
         return (safe_min_x, safe_min_y, safe_max_x, safe_max_y)
 
-    def _fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
-        """Scale normalized [0,1] waypoints to board mm coordinates with margin."""
-        if not wps:
-            return []
-        Wmm, Hmm = board_mm
-        
-
-        xs = [w.x_mm for w in wps]
-        ys = [w.y_mm for w in wps]
-        minx = min(xs)
-        maxx = max(xs)
-        miny = min(ys)
-        maxy = max(ys)
-        
-        w_norm = max(maxx - minx, 1e-6)
-        h_norm = max(maxy - miny, 1e-6)
-        
-        target_w = (1.0 - 2 * margin_frac) * Wmm
-        target_h = (1.0 - 2 * margin_frac) * Hmm
-        scale = min(target_w / w_norm, target_h / h_norm)
-        
-        cx_norm = 0.5 * (minx + maxx)
-        cy_norm = 0.5 * (miny + maxy)
-        
-        cx_board = 0.5 * Wmm
-        cy_board = 0.5 * Hmm
-        
-        out = []
-        for p in wps:
-            x_mm = (p.x_mm - cx_norm) * scale + cx_board
-            y_mm = (p.y_mm - cy_norm) * scale + cy_board
-            
-            x_mm = max(margin_frac * Wmm, min(x_mm, (1.0 - margin_frac) * Wmm))
-            y_mm = max(margin_frac * Hmm, min(y_mm, (1.0 - margin_frac) * Hmm))
-            
-            out.append(Waypoint(x_mm, y_mm))
-        return out
-
     def fit_path_to_board(self, wps, margin_frac: float = 0.05):
+        def _fit_path_to_board(wps: List[Waypoint], board_mm: Tuple[float, float], margin_frac: float = 0.10) -> List[Waypoint]:
+            if not wps:
+                return []
+            Wmm, Hmm = board_mm
+
+            xs = [w.x_mm for w in wps]
+            ys = [w.y_mm for w in wps]
+            minx = min(xs)
+            maxx = max(xs)
+            miny = min(ys)
+            maxy = max(ys)
+
+            w_norm = max(maxx - minx, 1e-6)
+            h_norm = max(maxy - miny, 1e-6)
+
+            target_w = (1.0 - 2 * margin_frac) * Wmm
+            target_h = (1.0 - 2 * margin_frac) * Hmm
+            scale = min(target_w / w_norm, target_h / h_norm)
+
+            cx_norm = 0.5 * (minx + maxx)
+            cy_norm = 0.5 * (miny + maxy)
+
+            cx_board = 0.5 * Wmm
+            cy_board = 0.5 * Hmm
+
+            out = []
+            for p in wps:
+                x_mm = (p.x_mm - cx_norm) * scale + cx_board
+                y_mm = (p.y_mm - cy_norm) * scale + cy_board
+
+                x_mm = max(margin_frac * Wmm, min(x_mm, (1.0 - margin_frac) * Wmm))
+                y_mm = max(margin_frac * Hmm, min(y_mm, (1.0 - margin_frac) * Hmm))
+
+                out.append(Waypoint(x_mm, y_mm))
+            return out
+
         sz = self.board_size_mm()
         if not sz:
             return []
-        
-        if self.cal.board_pose is None or self.cal.board_pose.confidence < 0.75:
-            print(
-                "PATH FITTING REJECTED: Board not sufficiently calibrated "
-                f"(confidence={getattr(self.cal.board_pose, 'confidence', 0.0):.2f}, need ≥0.75)"
-            )
+
+        if self.cal.board_pose is None:
+            print("PATH FITTING REJECTED: No board pose available.")
             return []
 
-        return _fit_to_board(wps, sz, margin_frac)
+        if not getattr(self.cal, "calibration_locked", False):
+            print("PATH FITTING REJECTED: Calibration not locked yet.")
+            return []
+
+        conf = getattr(self.cal.board_pose, "confidence", 1.0)
+        if conf < 0.30:
+            print(
+                "PATH FITTING WARNING: Board confidence low "
+                f"(confidence={conf:.2f}, recommended ≥0.30) - proceeding with locked homography."
+            )
+
+        return _fit_path_to_board(wps, sz, margin_frac)
+
 
 
     def get_pose_mm(self, use_raw=False):
