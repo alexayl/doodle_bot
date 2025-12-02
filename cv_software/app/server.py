@@ -32,6 +32,19 @@ PATHFINDING_DIR = os.getenv(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "pathfinding")),
 )
 STREAM_JPEG_QUALITY = 75
+USE_CV_CORRECTION = bool(int(os.getenv("USE_CV_CORRECTION", "1")))  # Toggle CV correction on/off (default from env)
+
+# Correction tuning via environment (with sensible defaults)
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+CORR_MAX_MM = _env_float("CORR_MAX_MM", 3.0)
+CORR_MIN_MM = _env_float("CORR_MIN_MM", 0.5)
+POSE_MAX_AGE_S = _env_float("POSE_MAX_AGE_S", 1.0)
+ALIGN_ENABLE_MM = _env_float("ALIGN_ENABLE_MM", 60.0)
 
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
@@ -58,7 +71,7 @@ def get_cam() -> Optional[ThreadedCamera]:
 # -----------------------------------------------------------------------------#
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
-bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
+bt = BTLink()
 
 # Default orientation derived from board marker layout:
 # - board X increases to the right (matches firmware)
@@ -109,14 +122,20 @@ def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Option
     if pose and bounds:
         (cx, cy), _, _ = pose
         min_x, min_y, max_x, max_y = bounds
+        # Allow a small epsilon beyond computed safe bounds to avoid over-rejecting tiny corrections
+        SAFETY_EPS_MM = 2.0
+        min_x_eps = min_x - SAFETY_EPS_MM
+        max_x_eps = max_x + SAFETY_EPS_MM
+        min_y_eps = min_y - SAFETY_EPS_MM
+        max_y_eps = max_y + SAFETY_EPS_MM
         final_x = cx + bx
         final_y = cy + by
 
-        if final_x < min_x or final_x > max_x or final_y < min_y or final_y > max_y:
+        if final_x < min_x_eps or final_x > max_x_eps or final_y < min_y_eps or final_y > max_y_eps:
             print(
                 f"AXIS SAFETY: Rejected move by ({bx:.1f},{by:.1f})mm "
                 f"from ({cx:.1f},{cy:.1f}) to ({final_x:.1f},{final_y:.1f}) "
-                f"outside bounds [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]"
+                f"outside bounds [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}] (±{SAFETY_EPS_MM:.1f}mm eps)"
             )
             return None
     else:
@@ -397,22 +416,116 @@ def _send_with_cv_correction(
     fitted_wps: List[Waypoint],
     window_size: int = 1,
 ):
-    """Send G-code with real-time CV correction using centralized PathCorrectionEngine."""
+    """Send G-code with optional real-time CV correction.
+    
+    If USE_CV_CORRECTION is False, just sends the G-code directly without correction callbacks.
+    """
+    if not USE_CV_CORRECTION:
+        print("[SEND] CV correction disabled - sending G-code directly")
+        bt.send_gcode_windowed(firmware_gcode, window_size=window_size)
+        return
+
+    print("[SEND] CV correction enabled")
     path_wps = _as_waypoints(fitted_wps)
     if not path_wps:
         raise RuntimeError("No fitted waypoints available for correction run.")
+
+    # Safety tuning: limit per-injection correction magnitude (mm)
+    MAX_CORR_MM = CORR_MAX_MM
+    MIN_CORR_MM = CORR_MIN_MM
+    # Pose freshness and proximity gating
+    # Use env-configured defaults defined in config section
+    # (POSE_MAX_AGE_S, ALIGN_ENABLE_MM)
+    
+    # Emergency stop: if deviation increases consecutively, stop correcting
+    MAX_INCREASING_CORRECTIONS = 5
+    last_deviation = None
+    increasing_count = 0
+    correction_disabled = False
+    
+    corrected_pids = set()
 
     RUN.load(path_wps)
     RUN.start()
     cvp.correction.reset()
 
+    lines = firmware_gcode.splitlines()
+    expected_pos_after_pid: List[Optional[Tuple[float, float]]] = [None] * len(lines)
+    try:
+        import re
+        # Infer anchor from first move
+        first_dx, first_dy = None, None
+        for raw in lines:
+            upper = raw.strip().upper()
+            if upper.startswith("G0") or upper.startswith("G1"):
+                dx_match = re.search(r'\bX\s*([-+]?\d+)', upper)
+                dy_match = re.search(r'\bY\s*([-+]?\d+)', upper)
+                if dx_match:
+                    first_dx = float(dx_match.group(1))
+                if dy_match:
+                    first_dy = float(dy_match.group(1))
+                break
+        
+        # Anchor = where robot starts (before first move)
+        # First move goes to fitted_wps[0], so anchor = fitted_wps[0] - (first_dx, first_dy)
+        if fitted_wps and first_dx is not None and first_dy is not None:
+            pos_x = float(fitted_wps[0].x_mm) - first_dx
+            pos_y = float(fitted_wps[0].y_mm) - first_dy
+        elif fitted_wps:
+            pos_x = float(fitted_wps[0].x_mm)
+            pos_y = float(fitted_wps[0].y_mm)
+        else:
+            pos_x = pos_y = 0.0
+        
+        print(f"[EXPECT] Inferred anchor=({pos_x:.1f},{pos_y:.1f}) first_move=({first_dx},{first_dy})")
+        
+        # Now integrate all moves
+        for i, raw in enumerate(lines):
+            line = raw.strip()
+            upper = line.upper()
+            
+            # Parse incremental G0/G1 moves and integrate
+            if upper.startswith("G0") or upper.startswith("G1"):
+                dx_match = re.search(r'\bX\s*([-+]?\d+)', upper)
+                dy_match = re.search(r'\bY\s*([-+]?\d+)', upper)
+                
+                if dx_match:
+                    pos_x += float(dx_match.group(1))
+                if dy_match:
+                    pos_y += float(dy_match.group(1))
+            
+            expected_pos_after_pid[i] = (pos_x, pos_y)
+    except Exception as e:
+        print(f"[EXPECT] Failed to compute expected positions: {e}")
+        pass
+
     def correction_callback(head_pid: int, head_line: str, next_line: Optional[str]) -> List[str]:
+        nonlocal last_deviation, increasing_count, correction_disabled, corrected_pids
+        
         if not RUN.active:
             return []
-        print("[CORRECTION CALLBACK] called")
+        
+        if correction_disabled:
+            print("[CORRECTION] DISABLED due to runaway behavior")
+            return []
+        
+        # Only correct each instruction once
+        if head_pid in corrected_pids:
+            return []
+        
+        print(f"[CORRECTION CALLBACK] called for pid={head_pid}")
+        try:
+            if 0 <= head_pid < len(expected_pos_after_pid):
+                exp = expected_pos_after_pid[head_pid]
+                if exp is not None:
+                    print(f"[EXPECT NEXT] pid={head_pid} after=({exp[0]:.1f},{exp[1]:.1f})")
+        except Exception:
+            pass
 
         current_idx = RUN.follower.index()
         next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
+        
+        print(f"[CORRECTION] follower at waypoint {current_idx}/{RUN.follower.total()}")
 
         correction = cvp.correction.compute_correction(
             waypoints=fitted_wps,
@@ -423,7 +536,28 @@ def _send_with_cv_correction(
         if correction is None:
             return []
 
+        # Only skip if pose is very stale or missing
+        pose = cvp.get_pose_mm()
+        if not pose:
+            print("[CORRECTION] skipping: no current pose")
+            return []
+        
+        # Check pose age only if extremely stale (>3s)
+        pose_age = cvp.pose_age_s()
+        if pose_age is not None and pose_age > 3.0:
+            print(f"[CORRECTION] skipping: pose very stale ({pose_age:.2f}s > 3.0s)")
+            return []
+
         bx, by = correction
+        # Clamp very small jitters and very large spikes
+        if abs(bx) < MIN_CORR_MM and abs(by) < MIN_CORR_MM:
+            return []
+        if abs(bx) > MAX_CORR_MM or abs(by) > MAX_CORR_MM:
+            scale = min(MAX_CORR_MM / max(abs(bx), 1e-9), MAX_CORR_MM / max(abs(by), 1e-9))
+            bx *= scale
+            by *= scale
+            print(f"[CORRECTION] clamped to ({bx:.2f},{by:.2f})mm")
+
         steps = _map_board_to_robot_steps(bx, by, min_step=1)
         if steps is None:
             return []
@@ -431,12 +565,58 @@ def _send_with_cv_correction(
         sx, sy = steps
         if sx == 0 and sy == 0:
             return []
-        return [f"G1 X{sx} Y{sy}"]
+        
+        # Check if we're making things worse
+        current_dev = cvp.correction.rms_deviation()
+        if last_deviation is not None and current_dev > last_deviation:
+            increasing_count += 1
+            print(f"[CORRECTION] WARNING: deviation increasing {increasing_count}/{MAX_INCREASING_CORRECTIONS} (was {last_deviation:.1f}mm, now {current_dev:.1f}mm)")
+            if increasing_count >= MAX_INCREASING_CORRECTIONS:
+                correction_disabled = True
+                print("[CORRECTION] EMERGENCY STOP: Deviation increased for 5+ corrections. Disabling CV correction.")
+                return []
+        else:
+            increasing_count = 0
+        last_deviation = current_dev
+        
+        # Mark this packet as corrected so we don't correct it again
+        corrected_pids.add(head_pid)
+        print(f"[CORRECTION] Injecting correction for pid={head_pid}, corrected_pids={len(corrected_pids)}")
+        
+        return [f"G1 X{int(sx)} Y{int(sy)}"]
 
     def on_head_executed(head_pid: int, head_line: str, ack_msg: str):
         pose = cvp.get_pose_mm()
         if not pose or not RUN.active:
             return
+
+        # Expected endpoint after executing this pid (based on fitted waypoints)
+        try:
+            if 0 <= head_pid < len(expected_pos_after_pid):
+                exp = expected_pos_after_pid[head_pid]
+                if exp is not None:
+                    (cx2, cy2), _, _ = pose
+                    diff = math.hypot(exp[0] - float(cx2), exp[1] - float(cy2))
+                    print(
+                        f"[EXPECT] pid={head_pid} expected=({exp[0]:.1f},{exp[1]:.1f}) "
+                        f"pose=({float(cx2):.1f},{float(cy2):.1f}) diff={diff:.1f}mm"
+                    )
+        except Exception:
+            pass
+
+        # Print expected vs actual before follower update
+        try:
+            (cx, cy), _, _ = pose
+            cur_idx = RUN.follower.index()
+            cur_tgt = RUN.follower.current_target()
+            if cur_tgt is not None:
+                dist = math.hypot(cur_tgt.x_mm - float(cx), cur_tgt.y_mm - float(cy))
+                print(
+                    f"[TARGET] pid={head_pid} line='{head_line.strip()}' idx={cur_idx} "
+                    f"target=({cur_tgt.x_mm:.1f},{cur_tgt.y_mm:.1f}) pose=({float(cx):.1f},{float(cy):.1f}) dist={dist:.1f}mm"
+                )
+        except Exception:
+            pass
 
         try:
             reached, dev_mm = RUN.follower.update_and_check_reached(pose)
@@ -453,6 +633,17 @@ def _send_with_cv_correction(
 
         if reached:
             print(f"WAYPOINT_REACHED: {RUN.follower.index()}/{RUN.follower.total()}")
+        else:
+            # Also print next target after update for reference
+            try:
+                nxt_idx = RUN.follower.index()
+                nxt_tgt = RUN.follower.current_target()
+                if nxt_tgt is not None:
+                    print(
+                        f"[TARGET NEXT] idx={nxt_idx} target=({nxt_tgt.x_mm:.1f},{nxt_tgt.y_mm:.1f})"
+                    )
+            except Exception:
+                pass
 
     try:
         bt.send_gcode_windowed(
@@ -730,7 +921,15 @@ def erase():
                 # else:
                 try:
                     gcode_str = _read_gcode_text("erase")
-                    start_pos = _first_waypoint_pos(fitted)
+                    # Use actual bot position from CV as starting point
+                    bot_pose = cvp.get_pose_mm()
+                    if bot_pose:
+                        (bot_x, bot_y), _, _ = bot_pose
+                        start_pos = (bot_x, bot_y)
+                        print(f"[START] Using bot position from CV: ({bot_x:.1f}, {bot_y:.1f})mm")
+                    else:
+                        start_pos = _first_waypoint_pos(fitted)
+                        print(f"[START] No bot pose available, using first waypoint: {start_pos}")
                     firmware_gcode = cvp.build_firmware_gcode(
                         gcode_str,
                         start_pos=start_pos,
@@ -790,6 +989,8 @@ def draw():
 
         if raw_norm:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
+            # print(f"FITTED: {len(fitted)} waypoints")
+            # print(f"FIRST 5 WPS: {[f'({wp.x_mm:.1f},{wp.y_mm:.1f})' for wp in fitted[:5]]}")
             _assert_fitted_in_bounds(fitted)
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
@@ -802,14 +1003,24 @@ def draw():
                     src_for_gcode = gcode_path if gcode_path else "draw"
                     gcode_str = _read_gcode_text(src_for_gcode)
                     print(f"Sending G-code from {src_for_gcode}...")
-                
-                    start_pos = _first_waypoint_pos(fitted)
+                    
+                    # Use actual bot position from CV as starting point
+                    bot_pose = cvp.get_pose_mm()
+                    if bot_pose:
+                        (bot_x, bot_y), _, _ = bot_pose
+                        start_pos = (bot_x, bot_y)
+                        print(f"[START] Using bot position from CV: ({bot_x:.1f}, {bot_y:.1f})mm")
+                    else:
+                        start_pos = _first_waypoint_pos(fitted)
+                        print(f"[START] No bot pose available, using first waypoint: {start_pos}")
                     firmware_gcode = cvp.build_firmware_gcode(
                         gcode_str,
                         start_pos=start_pos,
                         fitted_wps=fitted,
                         norm_origin=norm_origin,
                     )
+                    print("Built firmware G-code:")
+                    print(firmware_gcode)
                     print(f"Built firmware G-code with {len(firmware_gcode.splitlines())} lines.")              
                     _send_with_cv_correction(firmware_gcode, fitted, window_size=3)
                 except Exception as e:

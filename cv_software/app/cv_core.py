@@ -15,7 +15,6 @@ from app.control import Waypoint
 BOARD_MARGIN_MM = float(os.getenv("BOARD_MARGIN_MM", "67"))
 BOARD_MARGIN_FRAC = float(os.getenv("BOARD_MARGIN_FRAC", "0.20"))
 _POSE_ALPHA = 0.7
-_SCALE_ALPHA = 0.15
 _CONF_MIN_BOARD = 0.60
 _CONF_MIN_BOT = 0.30
 
@@ -26,6 +25,7 @@ CV_LOOKAHEAD_COUNT = int(os.getenv("CV_LOOKAHEAD_COUNT", "2"))
 CV_CROSS_TRACK_GAIN = float(os.getenv("CV_CROSS_TRACK_GAIN", "2.0"))
 CV_ADAPTIVE_STEP = bool(int(os.getenv("CV_ADAPTIVE_STEP", "1")))
 CV_MAX_CORRECTION_MM = float(os.getenv("CV_MAX_CORRECTION_MM", "8.0"))
+CV_MAX_POSE_AGE_S = float(os.getenv("CV_MAX_POSE_AGE_S", "1.0"))
 
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
@@ -345,8 +345,8 @@ class BoardCalibrator:
 
         if not accept:
             if not hasattr(self, '_last_reject_reason_log') or time.time() - self._last_reject_reason_log > 3.0:
-                if rejection_reason:
-                    print(f"Calibration rejected: {rejection_reason}")
+                # if rejection_reason:
+                #     print(f"Calibration rejected: {rejection_reason}")
                 self._last_reject_reason_log = time.time()
             return prev
 
@@ -541,6 +541,13 @@ class BotTracker:
         self._last_valid_pose = (pose, time.time())
         return pose
 
+    def pose_age_s(self) -> Optional[float]:
+        """Return seconds since the last verified bot pose, or None if never."""
+        if self._last_valid_pose is None:
+            return None
+        _, ts = self._last_valid_pose
+        return max(0.0, time.time() - ts)
+
 
 class PathCorrectionEngine:
     """
@@ -559,6 +566,8 @@ class PathCorrectionEngine:
         self.lookahead = max(1, CV_LOOKAHEAD_COUNT)
         self.adaptive_step = CV_ADAPTIVE_STEP
         self.max_correction_mm = CV_MAX_CORRECTION_MM
+        self.max_pose_age_s = CV_MAX_POSE_AGE_S
+        self._last_stale_log = 0.0
 
         # Deviation history for RMS stats (filled externally)
         self.dev_history: list[float] = []
@@ -587,7 +596,8 @@ class PathCorrectionEngine:
         waypoints: list,
         current_index: int,
         next_is_g1: bool = True,
-    ) -> Optional[Tuple[int, int]]:
+    ) -> Optional[Tuple[float, float]]:
+        """Simple correction: nudge robot toward current target waypoint."""
 
         if not next_is_g1:
             return None
@@ -599,73 +609,64 @@ class PathCorrectionEngine:
         if pose is None:
             return None
         cx, cy, _, conf = pose
+        pose_age = self.cvp.pose_age_s()
+        if pose_age is not None and pose_age > self.max_pose_age_s:
+            now = time.time()
+            if now - self._last_stale_log > 1.5:
+                print(
+                    f"[CORRECTION] skipping: pose stale ({pose_age:.2f}s > {self.max_pose_age_s:.2f}s)"
+                )
+                self._last_stale_log = now
+            return None
 
         # low-confidence pose
         if conf < 0.60:
             return None
 
-        start_idx = min(current_index, len(waypoints) - 1)
-        end_idx = min(len(waypoints) - 1, start_idx + self.lookahead)
-        if end_idx == start_idx:
-            return None
-
+        # Get current target waypoint
         try:
-            x1, y1 = self._wp_xy(waypoints[start_idx])
-            x2, y2 = self._wp_xy(waypoints[end_idx])
+            tx, ty = self._wp_xy(waypoints[current_index])
         except Exception:
             return None
 
-        seg_dx = x2 - x1
-        seg_dy = y2 - y1
-        seg_len = math.hypot(seg_dx, seg_dy)
-        if seg_len < 1e-6:
+        # Compute error from current position to target
+        error_x = tx - cx
+        error_y = ty - cy
+        error_mag = math.hypot(error_x, error_y)
+        
+        # If we're close enough, don't correct
+        if error_mag < self.min_error_mm:
             return None
 
-        rel_x = cx - x1
-        rel_y = cy - y1
-        cross = (rel_y * seg_dx - rel_x * seg_dy) / seg_len
-        if abs(cross) < self.min_error_mm:
-            return None
+        # Apply proportional correction (gentle nudge)
+        corr_gain = 0.3  # 30% of error per correction
+        dx_board = error_x * corr_gain
+        dy_board = error_y * corr_gain
 
-        nx = -seg_dy / seg_len
-        ny =  seg_dx / seg_len
+        # Clamp to max correction
+        corr_mag = math.hypot(dx_board, dy_board)
+        if corr_mag > self.max_correction_mm:
+            scale = self.max_correction_mm / corr_mag
+            dx_board *= scale
+            dy_board *= scale
 
-        corr_mm = -self.cross_track_gain * cross
-        if self.adaptive_step:
-            # scale aggressiveness based on how large the deviation is
-            window = max(self.min_error_mm * 4.0, 1.0)
-            scale = min(1.0, abs(cross) / window)
-            corr_mm *= max(0.35, scale)
-
-        corr_mm = max(-self.max_correction_mm, min(self.max_correction_mm, corr_mm))
-
-        dx_board = corr_mm * nx
-        dy_board = corr_mm * ny
-
+        # Ensure correction doesn't take us outside bounds
         bounds = self.cvp.get_board_bounds_mm()
         if bounds:
             min_x, min_y, max_x, max_y = bounds
-            scale = 1.0
-            if abs(dx_board) > 1e-6:
-                if dx_board > 0:
-                    allowed = (max_x - cx) / dx_board
-                else:
-                    allowed = (min_x - cx) / dx_board
-                scale = min(scale, max(0.0, min(1.0, allowed)))
-            if abs(dy_board) > 1e-6:
-                if dy_board > 0:
-                    allowed = (max_y - cy) / dy_board
-                else:
-                    allowed = (min_y - cy) / dy_board
-                scale = min(scale, max(0.0, min(1.0, allowed)))
-            if scale <= 0.0:
-                return None
-            dx_board *= scale
-            dy_board *= scale
+            final_x = cx + dx_board
+            final_y = cy + dy_board
+            
+            # Clamp final position to bounds and recompute delta
+            final_x = max(min_x, min(final_x, max_x))
+            final_y = max(min_y, min(final_y, max_y))
+            dx_board = final_x - cx
+            dy_board = final_y - cy
 
         if abs(dx_board) < 1e-3 and abs(dy_board) < 1e-3:
             return None
 
+        print(f"[CORRECTION] error=({error_x:.1f},{error_y:.1f})mm mag={error_mag:.1f}mm → correction=({dx_board:.1f},{dy_board:.1f})mm")
         return dx_board, dy_board
 
 
@@ -885,6 +886,12 @@ class CVPipeline:
 
         cx, cy = bot.center_board_mm
         return (cx, cy), float(bot.heading_rad), float(bot.confidence)
+
+    def pose_age_s(self) -> Optional[float]:
+        """Expose tracker pose age so correction logic can detect stale data."""
+        if not hasattr(self, "trk") or self.trk is None:
+            return None
+        return self.trk.pose_age_s()
     def get_path_stats(self) -> Dict:
         if not self.correction.dev_history:
             return {}
@@ -913,10 +920,13 @@ class CVPipeline:
 
         def _planar_anchor() -> Tuple[float, float]:
             anchor = None
-            if norm_origin is not None:
-                anchor = self.map_normalized_point_to_board(norm_origin[0], norm_origin[1], margin_frac=margin_frac)
+            # Prioritize actual start_pos (bot position from markers)
             if anchor is None and start_pos is not None:
                 anchor = start_pos
+                print(f"[GCODE] Using bot marker position as anchor: {anchor}")
+            if anchor is None and norm_origin is not None:
+                anchor = self.map_normalized_point_to_board(norm_origin[0], norm_origin[1], margin_frac=margin_frac)
+                print(f"[GCODE] Using normalized origin {norm_origin} → board pos {anchor}")
             if anchor is None and fitted_wps:
                 first = fitted_wps[0]
                 anchor = (first.x_mm, first.y_mm)
@@ -929,6 +939,7 @@ class CVPipeline:
 
         if fitted_wps:
             anchor = _planar_anchor()
+            anchor = (start_pos[0], start_pos[1]) if start_pos is not None else anchor
             path_points: List[Tuple[float, float]] = [anchor] + [
                 (float(wp.x_mm), float(wp.y_mm)) for wp in fitted_wps
             ]
