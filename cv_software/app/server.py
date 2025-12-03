@@ -437,12 +437,15 @@ def _send_with_cv_correction(
     # Use env-configured defaults defined in config section
     # (POSE_MAX_AGE_S, ALIGN_ENABLE_MM)
     
-    # Emergency stop: if deviation increases consecutively, stop correcting
+        # Emergency stop: if deviation increases consecutively, stop correcting
     MAX_INCREASING_CORRECTIONS = 5
     last_deviation = None
     increasing_count = 0
     correction_disabled = False
     
+    # Apply corrections periodically, not on every instruction
+    CORRECTION_INTERVAL = 5  # Apply correction every N instructions
+    correction_counter = 0
     corrected_pids = set()
 
     RUN.load(path_wps)
@@ -500,7 +503,7 @@ def _send_with_cv_correction(
         pass
 
     def correction_callback(head_pid: int, head_line: str, next_line: Optional[str]) -> List[str]:
-        nonlocal last_deviation, increasing_count, correction_disabled, corrected_pids
+        nonlocal last_deviation, increasing_count, correction_disabled, correction_counter, corrected_pids
         
         if not RUN.active:
             return []
@@ -509,11 +512,16 @@ def _send_with_cv_correction(
             print("[CORRECTION] DISABLED due to runaway behavior")
             return []
         
+        # Only correct periodically (every CORRECTION_INTERVAL instructions)
+        correction_counter += 1
+        if correction_counter % CORRECTION_INTERVAL != 0:
+            return []
+        
         # Only correct each instruction once
         if head_pid in corrected_pids:
             return []
         
-        print(f"[CORRECTION CALLBACK] called for pid={head_pid}")
+        print(f"[CORRECTION CALLBACK] called for pid={head_pid} (interval check passed)")
         try:
             if 0 <= head_pid < len(expected_pos_after_pid):
                 exp = expected_pos_after_pid[head_pid]
@@ -824,7 +832,7 @@ def _cv_worker():
             #         cvp.calibrate_board(frame)
             #     except Exception:
             #         print("[METRICS] ERROR: failed to reset calibration")
-        time.sleep(0.004)
+        time.sleep(0.001)
 
 def _ensure_cv_thread():
     global _cv_thread

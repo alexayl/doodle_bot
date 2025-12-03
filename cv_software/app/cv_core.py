@@ -197,7 +197,11 @@ class BoardCalibrator:
         return float(c[0]), float(c[1])
 
     def _undistort(self, frame_bgr):
+        # Skip undistortion if no camera calibration available (optimization #5)
         if self.cam.K is None or self.cam.dist is None:
+            return frame_bgr
+        # Skip if distortion coefficients are negligible
+        if self.cam.dist is not None and np.allclose(self.cam.dist, 0.0, atol=1e-6):
             return frame_bgr
         h, w = frame_bgr.shape[:2]
         K_new, _ = cv2.getOptimalNewCameraMatrix(self.cam.K, self.cam.dist, (w, h), 1.0, (w, h))
@@ -232,6 +236,9 @@ class BoardCalibrator:
 
     def calibrate(self, frame_bgr, force_recalibrate: bool = True) -> Optional[BoardPose]:
         self.pose_fresh = False
+        
+        if self.calibration_locked and self.board_pose is not None and self.board_pose.confidence > 0.6:
+            return self.board_pose
 
         frame_bgr = self._undistort(frame_bgr)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
