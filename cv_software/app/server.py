@@ -457,7 +457,7 @@ def _send_with_cv_correction(
     try:
         import re
         # Infer anchor from first move
-        first_dx, first_dy = None, None
+        first_dx, first_dy = 0.0, 0.0
         for raw in lines:
             upper = raw.strip().upper()
             if upper.startswith("G0") or upper.startswith("G1"):
