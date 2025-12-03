@@ -266,6 +266,7 @@ void MotionPlanner::reset_state() {
 int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
 
     // consume servo instruction
+    servo_.setAngle((uint8_t)gCodeCmd.args[1].value);
     
     // send ack command back
     if (g_bleService) {

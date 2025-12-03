@@ -20,6 +20,15 @@ default_commands = [
     b"G1 X0 Y-100\n",
 ]
 
+servo_test_commands = [
+    b"M280 P0 S0\n",
+    b"M280 P0 S45\n",
+    b"M280 P0 S90\n",
+    b"M280 P0 S135\n",
+]
+
+commands_to_send = default_commands
+
 def load_gcode_file(filename: str) -> List[bytes]:
     """
     Parse G-code file into transmittable command list.
@@ -60,7 +69,7 @@ async def main():
     if args.filename:
         commands = load_gcode_file(args.filename)
     else:
-        commands = default_commands
+        commands = commands_to_send
         print(f"No file specified, using default test pattern ({len(commands)} commands)")
     
     # Transmit packets
