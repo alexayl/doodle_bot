@@ -147,8 +147,8 @@ def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Option
         mag = max(min_step, int(round(abs(val))))
         return mag if val >= 0 else -mag
 
-    cmd_x = AXIS_SIGN["X"] * float(bx)
-    cmd_y = AXIS_SIGN["Y"] * float(by)
+    cmd_x = float(bx)
+    cmd_y = float(by)
     sx = _quantize(cmd_x)
     sy = _quantize(cmd_y)
 

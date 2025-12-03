@@ -619,9 +619,9 @@ class PathCorrectionEngine:
                 self._last_stale_log = now
             return None
 
-        # low-confidence pose
-        if conf < 0.60:
-            return None
+        # # low-confidence pose
+        # if conf < 0.60:
+        #     return None
 
         # Get current target waypoint
         try:
