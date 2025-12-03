@@ -60,4 +60,11 @@ public:
      * @return 0 if supported, -EINVAL otherwise
      */
     static int isSupported(const GCodeCmd& cmd);
+
+    /**
+     * @brief Reset parser state (e.g., on BLE disconnect)
+     */
+    void reset() {
+        expected_packet_id = 0;
+    }
 };

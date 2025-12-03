@@ -29,7 +29,7 @@ servo_test_commands = [
     b"M280 P0 S135\n",
 ]
 
-commands_to_send = default_commands
+commands_to_send = servo_test_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """
@@ -84,8 +84,6 @@ async def main():
         print(f"Starting transmission of {len(commands)} commands...")
         await packet_handler.send_packets(commands)
         print("All commands sent successfully!")
-        
-        await asyncio.sleep(2)
         
     except KeyboardInterrupt:
         print("\nTransmission interrupted by user")

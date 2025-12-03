@@ -89,7 +89,7 @@ class BLEPacketHandler:
         
         self.response_received = True
 
-    async def send_packet(self, command_bytes: bytes):
+    async def send_packet(self, command_bytes: bytes, max_retries: int = 3):
         """
         Send a packet with retry logic until successful acknowledgment.
         """
@@ -102,7 +102,7 @@ class BLEPacketHandler:
         packet_id = packet_with_id[0]
         self.response_received = False
         
-        while True:
+        for attempt in range(max_retries):
             try:
                 if not self.client.is_connected:
                     raise RuntimeError("BLE connection lost")
@@ -116,9 +116,9 @@ class BLEPacketHandler:
                 
                 if self.last_received_packet_id == packet_id and self.last_received_message == expected_response:
                     print(f"RECEIVE::SUCCESS: pid: {packet_id} msg '{self.last_received_message}'")
-                    break
+                    return True
                 else:
-                    print(f"RECEIVE::FAIL: pid: {packet_id} nack '{self.last_received_message}' (expected '{expected_response}')")
+                    print(f"RECEIVE::FAIL: pid: {packet_id} nack '{self.last_received_message}' (attempt {attempt + 1}/{max_retries})")
                     self.response_received = False
                     await asyncio.sleep(0.1)
                     
@@ -127,6 +127,9 @@ class BLEPacketHandler:
                 if "not supported" in str(e) or "connection" in str(e).lower():
                     raise RuntimeError(f"Critical BLE error: {e}")
                 await asyncio.sleep(0.5)
+        
+        print(f"SEND::FAILED: pid:{packet_id} after {max_retries} attempts")
+        return False
         
         
 
