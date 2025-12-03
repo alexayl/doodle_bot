@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include "ble_service.h"
+#include "comms_thread.h"
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -67,6 +68,10 @@ void BleService::connected(struct bt_conn *conn, uint8_t err) {
 void BleService::disconnected(struct bt_conn *conn, uint8_t reason) {
     printk("BLE_CONN::INFO: Device disconnected (reason %u)\n", reason);
     
+    // Reset comms state (packet ID counter, etc.)
+    comms_reset();
+    
+    // Schedule advertising restart via work queue (deferred to system workqueue context)
     k_work_schedule(&adv_restart_work, K_MSEC(100));
 }
 

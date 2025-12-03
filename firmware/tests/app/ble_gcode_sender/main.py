@@ -18,6 +18,18 @@ default_commands = [
     b"G1 X0 Y100\n", 
     b"G1 X-100 Y0\n",
     b"G1 X0 Y-100\n",
+    # b"G1 X100 Y0\n",
+    # b"G1 X0 Y100\n", 
+    # b"G1 X-100 Y0\n",
+    # b"G1 X0 Y-100\n",
+    # b"G1 X100 Y0\n",
+    # b"G1 X0 Y100\n", 
+    # b"G1 X-100 Y0\n",
+    # b"G1 X0 Y-100\n",
+    # b"G1 X100 Y0\n",
+    # b"G1 X0 Y100\n", 
+    # b"G1 X-100 Y0\n",
+    # b"G1 X0 Y-100\n",
 ]
 
 servo_test_commands = [
@@ -27,7 +39,7 @@ servo_test_commands = [
     b"M280 P0 S135\n",
 ]
 
-commands_to_send = default_commands
+commands_to_send = servo_test_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """
@@ -82,8 +94,6 @@ async def main():
         print(f"Starting transmission of {len(commands)} commands...")
         await packet_handler.send_packets(commands)
         print("All commands sent successfully!")
-        
-        await asyncio.sleep(2)
         
     except KeyboardInterrupt:
         print("\nTransmission interrupted by user")
