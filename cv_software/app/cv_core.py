@@ -25,7 +25,10 @@ CV_LOOKAHEAD_COUNT = int(os.getenv("CV_LOOKAHEAD_COUNT", "2"))
 CV_CROSS_TRACK_GAIN = float(os.getenv("CV_CROSS_TRACK_GAIN", "2.0"))
 CV_ADAPTIVE_STEP = bool(int(os.getenv("CV_ADAPTIVE_STEP", "1")))
 CV_MAX_CORRECTION_MM = float(os.getenv("CV_MAX_CORRECTION_MM", "8.0"))
-CV_MAX_POSE_AGE_S = float(os.getenv("CV_MAX_POSE_AGE_S", "1.0"))
+CV_MAX_POSE_AGE_S = float(os.getenv("CV_MAX_POSE_AGE_S", "3.0"))
+CV_DYNAMIC_GAIN_SCALE = float(os.getenv("CV_DYNAMIC_GAIN_SCALE", "1.0"))
+CV_WAYPOINT_HYSTERESIS = int(os.getenv("CV_WAYPOINT_HYSTERESIS", "3"))
+CV_ARRIVAL_MM = float(os.getenv("CV_ARRIVAL_MM", "15.0"))
 
 BOARD_CORNERS = {"TL": 0, "TR": 1, "BR": 2, "BL": 3}
 BOT_MARKERS = (10, 11)
@@ -37,11 +40,6 @@ BOT_BASELINE_MM = 100.0
 KNOWN_BOARD_WIDTH_MM = float(800)
 KNOWN_BOARD_HEIGHT_MM = float(400)
 
-_MAX_REPROJ_ERR_PX = 1.2
-_MAX_SIZE_JUMP_FRAC = 0.15
-_MAX_CENTER_JUMP_PX = 40.0
-
-_REPROJ_GOOD_PX = 0.5
 _COND_HARD_LIMIT = 5e7
 _COND_WARN_LIMIT = 3e4
 
@@ -49,15 +47,6 @@ _HEADING_MAX_DEG = float(os.getenv("HEADING_MAX_DEG", "10.0"))
 _HEADING_MIN_SAMPLES = int(os.getenv("HEADING_MIN_SAMPLES", "5"))
 _HEADING_HISTORY_SIZE = int(os.getenv("HEADING_HISTORY_SIZE", "30"))
 
-
-def correct_delta_mm(delta_board_mm: tuple[float, float], heading_rad: float) -> tuple[float, float]:
-    dx = float(delta_board_mm[0])
-    dy = float(delta_board_mm[1])
-    c = math.cos(float(heading_rad))
-    s = math.sin(float(heading_rad))
-    fwd = dx * c + dy * s
-    left = -dx * s + dy * c
-    return fwd, left
 
 
 @dataclass
@@ -70,8 +59,6 @@ class CameraModel:
 class BoardPose:
     H_img2board: np.ndarray
     board_size_px: Tuple[int, int]
-    mm_per_px: Optional[float] = None
-    reproj_err_px: float = np.inf
     confidence: float = 0.0
     corners_board_px: Optional[Dict[str, Tuple[float, float]]] = None
 
@@ -229,10 +216,7 @@ class BoardCalibrator:
             out["TL"] = out["BL"] + (out["TR"] - out["BR"])
         return out
 
-    @staticmethod
-    def _reproj_error(H: np.ndarray, img_pts: np.ndarray, dst_pts: np.ndarray) -> float:
-        proj = cv2.perspectiveTransform(img_pts[None].astype(np.float32), H)[0]
-        return float(np.mean(np.linalg.norm(proj - dst_pts.astype(np.float32), axis=1)))
+
 
     def calibrate(self, frame_bgr, force_recalibrate: bool = True) -> Optional[BoardPose]:
         self.pose_fresh = False
@@ -289,8 +273,6 @@ class BoardCalibrator:
         if abs(H[2, 2]) > 1e-12:
             H = H / H[2, 2]
 
-        reproj = self._reproj_error(H, img_pts, board_rect)
-
         width_px = float(np.linalg.norm(tr - tl))
         height_px = float(np.linalg.norm(bl - tl))
         cond_H = np.linalg.cond(H)
@@ -299,18 +281,10 @@ class BoardCalibrator:
             if not hasattr(self, "_low_conf_log") or time.time() - self._low_conf_log > 2.0:
                 print(
                     f"[BOARD_CAL] Low confidence: found {found}/4 corners, "
-                    f"conf_raw={conf_raw:.2f}, reproj={reproj:.3f}px, cond={cond_H:.1e}"
+                    f"conf_raw={conf_raw:.2f}, cond={cond_H:.1e}"
                 )
                 print("[BOARD_CAL] Marking calibration as unstable until markers recover.")
                 self._low_conf_log = time.time()
-
-        if reproj > _REPROJ_GOOD_PX:
-            if not hasattr(self, "_reproj_log") or time.time() - self._reproj_log > 2.5:
-                # print(
-                #     f"[BOARD_CAL] High reprojection error: {reproj:.3f}px "
-                #     f"(threshold={_REPROJ_GOOD_PX})"
-                # )
-                self._reproj_log = time.time()
 
         if cond_H > _COND_WARN_LIMIT:
             if not hasattr(self, "_cond_log") or time.time() - self._cond_log > 3.0:
@@ -320,17 +294,8 @@ class BoardCalibrator:
                 # )
                 self._cond_log = time.time()
 
-        accept = not (reproj > _REPROJ_GOOD_PX and cond_H > _COND_HARD_LIMIT)
-        rejection_reason = None
-
-        if prev is not None and prev.board_size_px is not None:
-            W0, H0 = prev.board_size_px
-            if W0 > 0 and H0 > 0:
-                w_jump = abs(width_px - W0) / max(W0, 1e-6)
-                h_jump = abs(height_px - H0) / max(H0, 1e-6)
-                if (w_jump > _MAX_SIZE_JUMP_FRAC) or (h_jump > _MAX_SIZE_JUMP_FRAC):
-                    accept = False
-                    rejection_reason = f"size_jump w={w_jump:.2%} h={h_jump:.2%}"
+            accept = not (cond_H > _COND_HARD_LIMIT)
+            rejection_reason = None
 
             c_new = np.array(self._center_from_quad(tl, tr, br, bl))
 
@@ -341,10 +306,10 @@ class BoardCalibrator:
                     dtype=np.float32,
                 )[None]
                 img_center_prev = cv2.perspectiveTransform(board_center, Hinv)[0][0]
-                center_jump = float(np.linalg.norm(c_new - img_center_prev))
-                if center_jump > _MAX_CENTER_JUMP_PX:
+                center_jump_mm = float(np.linalg.norm(c_new - img_center_prev))
+                if center_jump_mm > 100.0:
                     accept = False
-                    rejection_reason = f"center_jump {center_jump:.1f}px > {_MAX_CENTER_JUMP_PX}px"
+                    rejection_reason = f"center_jump {center_jump_mm:.1f}mm > 100mm"
             except Exception:
                 pass
         elif prev is None:
@@ -371,8 +336,6 @@ class BoardCalibrator:
         self.board_pose = BoardPose(
             H_img2board=H,
             board_size_px=(int(round(width_px)), int(round(height_px))),
-            mm_per_px=None,
-            reproj_err_px=float(reproj),
             confidence=float(conf_smooth),
             corners_board_px={
                 "TL": (0.0, KNOWN_BOARD_HEIGHT_MM),
@@ -382,26 +345,6 @@ class BoardCalibrator:
             },
         )
         self.pose_fresh = True
-
-        # try:
-        #     img_corner_log = (
-        #         f"[BOARD_CAL] Image corners (px): "
-        #         f"TL=({tl[0]:.1f},{tl[1]:.1f}), "
-        #         f"TR=({tr[0]:.1f},{tr[1]:.1f}), "
-        #         f"BR=({br[0]:.1f},{br[1]:.1f}), "
-        #         f"BL=({bl[0]:.1f},{bl[1]:.1f})"
-        #     )
-        #     board_corner_log = (
-        #         f"[BOARD_CAL] Board corners (mm): "
-        #         f"TL=(0.0,{KNOWN_BOARD_HEIGHT_MM:.1f}), "
-        #         f"TR=({KNOWN_BOARD_WIDTH_MM:.1f},{KNOWN_BOARD_HEIGHT_MM:.1f}), "
-        #         f"BR=({KNOWN_BOARD_WIDTH_MM:.1f},0.0), "
-        #         f"BL=(0.0,0.0)"
-        #     )
-        #     print(img_corner_log)
-        #     print(board_corner_log)
-        # except Exception:
-        #     pass
 
         return self.board_pose
 
@@ -491,6 +434,14 @@ class BotTracker:
 
         has_marker_0 = BOT_MARKERS[0] in id_map
         has_marker_1 = BOT_MARKERS[1] in id_map
+        # Marker visibility diagnostics: list all detected IDs this frame
+        try:
+            if not hasattr(self, '_last_vis_log') or time.time() - self._last_vis_log > 0.75:
+                ids_list = sorted(list(id_map.keys()))
+                print(f"BOT_TRACK markers={ids_list} has_markers: {has_marker_0} {has_marker_1}")
+                self._last_vis_log = time.time()
+        except Exception:
+            pass
 
         if not has_marker_0 and not has_marker_1:
             if self._last_valid_pose is not None:
@@ -641,16 +592,13 @@ class PathCorrectionEngine:
         error_y = ty - cy
         error_mag = math.hypot(error_x, error_y)
         
-        # If we're close enough, don't correct
         if error_mag < self.min_error_mm:
             return None
 
-        # Apply proportional correction (gentle nudge)
         corr_gain = 0.3  # 30% of error per correction
         dx_board = error_x * corr_gain
         dy_board = error_y * corr_gain
 
-        # Clamp to max correction
         corr_mag = math.hypot(dx_board, dy_board)
         if corr_mag > self.max_correction_mm:
             scale = self.max_correction_mm / corr_mag
@@ -760,8 +708,8 @@ class CVPipeline:
 
         good_cal = (
             st["calibrated"]
-            and st["board_reproj_err_px"] is not None
-            and st["board_reproj_err_px"] <= _MAX_REPROJ_ERR_PX
+            # and st["board_reproj_err_px"] is not None
+            # and st["board_reproj_err_px"] <= _MAX_REPROJ_ERR_PX
             and (st["board_confidence"] is None or st["board_confidence"] >= _CONF_MIN_BOARD)
         )
 
@@ -775,8 +723,6 @@ class CVPipeline:
         bot = self._pose_smooth or self._bot
         return {
             "calibrated": bp is not None,
-            "board_size_px": None if bp is None else bp.board_size_px,
-            "board_reproj_err_px": None if bp is None else bp.reproj_err_px,
             "board_confidence": None if bp is None else bp.confidence,
             "board_pose_fresh": getattr(self.cal, "pose_fresh", False),
             "bot_pose": None if bot is None else {
@@ -841,6 +787,7 @@ class CVPipeline:
         Take normalized waypoints (0..1 in both axes) and map them into the
         already-safe board bounds returned by get_board_bounds_mm().
         margin_frac optionally shrinks inside those safe bounds.
+        All waypoints are validated and clamped to ensure they stay within bounds.
         """
         if not wps:
             return []
@@ -851,17 +798,37 @@ class CVPipeline:
             return []
 
         min_x2, min_y2, span_x, span_y = rect
+        
+        # Get absolute bounds for validation
+        bounds = self.get_board_bounds_mm()
+        if not bounds:
+            print("PATH FITTING REJECTED: No board bounds for validation.")
+            return []
+        min_x_abs, min_y_abs, max_x_abs, max_y_abs = bounds
 
         out: list[Waypoint] = []
-        for p in wps:
+        clamped_count = 0
+        for i, p in enumerate(wps):
             # p.x_mm and p.y_mm are actually normalized [0,1] here
             nx = float(p.x_mm)
             ny = float(p.y_mm)
 
             x_mm = min_x2 + nx * span_x
             y_mm = min_y2 + ny * span_y
+            
+            # Validate and clamp to absolute bounds
+            x_clamped = max(min_x_abs, min(x_mm, max_x_abs))
+            y_clamped = max(min_y_abs, min(y_mm, max_y_abs))
+            
+            if abs(x_mm - x_clamped) > 0.1 or abs(y_mm - y_clamped) > 0.1:
+                clamped_count += 1
+                if clamped_count <= 3:  # Log first few to avoid spam
+                    print(f"[FIT_PATH] Waypoint {i} clamped from ({x_mm:.1f},{y_mm:.1f}) to ({x_clamped:.1f},{y_clamped:.1f})")
 
-            out.append(Waypoint(x_mm=x_mm, y_mm=y_mm))
+            out.append(Waypoint(x_mm=x_clamped, y_mm=y_clamped))
+        
+        if clamped_count > 0:
+            print(f"[FIT_PATH] Total {clamped_count}/{len(wps)} waypoints clamped to bounds")
 
         return out
 

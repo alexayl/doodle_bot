@@ -32,10 +32,6 @@ ERROR_COOLDOWN_S = float(os.getenv("BT_ERROR_COOLDOWN_S", "0.50"))
 MAX_INSTRUCTIONS_AHEAD = int(os.getenv("BT_MAX_AHEAD", "5"))
 
 class BTLink:
-    """
-    Threaded BLE link that mirrors the behavior of the standalone BLEPacketHandler,
-    but exposes a simple synchronous API for your Flask routes.
-    """
 
     def __init__(self, device_name: str = DEVICE_NAME):
         self.device_name = device_name
@@ -351,7 +347,6 @@ class BTLink:
         start_time = time.time()
 
         def _send_line(line: str):
-            # Block until window has space (instructions_in_flight < window_size)
             while self.instructions_in_flight >= window_size:
                 time.sleep(0.01)
             data = (line + "\n").encode("utf-8")
@@ -361,11 +356,9 @@ class BTLink:
             inflight.append((pid_used, line))
             return pid_used
 
-        # Prime initial window
         while pending and len(inflight) < window_size:
             _send_line(pending.pop(0))
 
-        # Main loop
         while pending or inflight:
             # Timeout check
             if (time.time() - start_time) > exec_timeout_s:
@@ -413,7 +406,6 @@ class BTLink:
                         print(f"CORR::INJECT after pid:{head_pid} inserting {len(new_lines)} line(s): {new_lines}")
                         for nl in reversed(new_lines):
                             pending.insert(0, nl.strip())
-                # Send more to fill window
                 while pending and len(inflight) < window_size:
                     _send_line(pending.pop(0))
 

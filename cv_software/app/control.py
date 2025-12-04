@@ -34,6 +34,9 @@ class FollowerParams:
     max_step_mm: float = 25.0
     max_step_forward_mm: float = 25.0
     max_step_left_mm: float = 12.0
+    lookahead_distance_mm: float = 30.0  # Target point ahead on path
+    max_position_jump_mm: float = 50.0   # Outlier rejection threshold
+    min_segment_length_mm: float = 5.0   # Skip micro-segments
 
 
 # ------------------------------------------------------------
@@ -59,18 +62,37 @@ class PathFollower:
         # Debounce for waypoint reached
         self._waypoint_stable_count = 0
         self._stable_threshold = int(os.getenv("WAYPOINT_DEBOUNCE_FRAMES", "3"))
+        
+        # Outlier rejection
+        self._last_valid_pos: Optional[Tuple[float, float]] = None
+        self._outlier_count = 0
 
     # ------------------------
     # Basic Controls
     # ------------------------
 
-    def load_waypoints(self, wps: List[Waypoint]) -> None:
+    def load_waypoints(self, wps: List[Waypoint], bounds: Optional[Tuple[float, float, float, float]] = None) -> None:
         self._wps = wps or []
         self._i = 0
         self.active = False
         self.reached_history = []
         self._smooth_deviation = 0.0
         self._waypoint_stable_count = 0
+        self._last_valid_pos = None
+        self._outlier_count = 0
+        
+        # Validate all waypoints are within bounds if provided
+        if bounds and self._wps:
+            min_x, min_y, max_x, max_y = bounds
+            out_of_bounds = []
+            for i, wp in enumerate(self._wps):
+                if not (min_x <= wp.x_mm <= max_x and min_y <= wp.y_mm <= max_y):
+                    out_of_bounds.append((i, wp.x_mm, wp.y_mm))
+            
+            if out_of_bounds:
+                print(f"[FOLLOWER] WARNING: {len(out_of_bounds)}/{len(self._wps)} waypoints out of bounds:")
+                for idx, x, y in out_of_bounds[:3]:  # Show first 3
+                    print(f"  Waypoint {idx}: ({x:.1f},{y:.1f}) outside [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
 
     def start(self) -> None:
         self.active = bool(self._wps)
@@ -78,6 +100,8 @@ class PathFollower:
         self.reached_history = []
         self._smooth_deviation = 0.0
         self._waypoint_stable_count = 0
+        self._last_valid_pos = None
+        self._outlier_count = 0
 
     def stop(self) -> None:
         self.active = False
@@ -100,8 +124,8 @@ class PathFollower:
     def _lateral_deviation(self, x: float, y: float, idx: int) -> float:
         """
         True signed cross-track deviation relative to segment idx→idx+1.
-        Uses standard 2D cross product geometry.
-        If last segment: return point distance.
+        Projects robot position onto segment and returns perpendicular distance.
+        If past segment end, uses distance to next waypoint.
         """
         if idx >= len(self._wps) - 1:
             # Last waypoint → just distance
@@ -116,24 +140,100 @@ class PathFollower:
         vx = x2 - x1
         vy = y2 - y1
         seg_len = math.hypot(vx, vy)
-        if seg_len < 1e-6:
-            return math.hypot(x - x1, y - y1)
+        
+        # Skip micro-segments
+        if seg_len < self.p.min_segment_length_mm:
+            return math.hypot(x - x2, y - y2)
 
-        # normalized direction
-        nx = vx / seg_len
-        ny = vy / seg_len
+        # Normalized direction vector
+        ux = vx / seg_len
+        uy = vy / seg_len
 
-        # robot displacement from wp1
+        # Robot displacement from wp1
         rx = x - x1
         ry = y - y1
 
-        # cross-track deviation (signed)
-        cross = rx * ny - ry * nx
-        return abs(cross)
+        # Project onto segment (along-track distance)
+        along = rx * ux + ry * uy
+        
+        # Cross-track deviation (perpendicular distance)
+        cross = abs(rx * uy - ry * ux)
+        
+        # If projection is past segment end, use distance to next waypoint
+        if along > seg_len:
+            return math.hypot(x - x2, y - y2)
+        
+        return cross
+
+    # ------------------------
+    # Lookahead Target
+    # ------------------------
+    
+    def _get_lookahead_target(self, x: float, y: float) -> Optional[Waypoint]:
+        """
+        Find a target point on the path ahead of current position.
+        Returns waypoint at approximately lookahead_distance_mm along path.
+        """
+        if not self.active or self._i >= len(self._wps):
+            return None
+        
+        lookahead = self.p.lookahead_distance_mm
+        accumulated_dist = 0.0
+        
+        # Start from current waypoint
+        for j in range(self._i, len(self._wps)):
+            wp = self._wps[j]
+            dist_to_wp = math.hypot(wp.x_mm - x, wp.y_mm - y)
+            
+            if accumulated_dist + dist_to_wp >= lookahead:
+                # Interpolate between current pos and this waypoint
+                remaining = lookahead - accumulated_dist
+                if dist_to_wp > 1e-6:
+                    t = remaining / dist_to_wp
+                    return Waypoint(
+                        x_mm=x + t * (wp.x_mm - x),
+                        y_mm=y + t * (wp.y_mm - y)
+                    )
+                return wp
+            
+            accumulated_dist += dist_to_wp
+            if j + 1 < len(self._wps):
+                next_wp = self._wps[j + 1]
+                seg_len = math.hypot(next_wp.x_mm - wp.x_mm, next_wp.y_mm - wp.y_mm)
+                accumulated_dist += seg_len
+        
+        # If path is shorter than lookahead, return last waypoint
+        return self._wps[-1] if self._wps else None
 
     # ------------------------
     # Waypoint Advancement
     # ------------------------
+    
+    def _is_pose_valid(self, x: float, y: float) -> bool:
+        """
+        Check if pose is valid (not an outlier).
+        Returns False if position jumped too far from last known good position.
+        """
+        if self._last_valid_pos is None:
+            self._last_valid_pos = (x, y)
+            return True
+        
+        lx, ly = self._last_valid_pos
+        jump = math.hypot(x - lx, y - ly)
+        
+        if jump > self.p.max_position_jump_mm:
+            self._outlier_count += 1
+            if self._outlier_count >= 3:
+                # Accept after 3 consistent outliers (robot may have actually moved)
+                self._last_valid_pos = (x, y)
+                self._outlier_count = 0
+                return True
+            return False
+        
+        # Valid pose - update tracking
+        self._last_valid_pos = (x, y)
+        self._outlier_count = 0
+        return True
 
     def _advance_if_reached(self, x: float, y: float) -> None:
         """Advance index if robot is sufficiently close along segment direction."""
@@ -146,27 +246,39 @@ class PathFollower:
             dy = tgt.y_mm - y
             dist = math.hypot(dx, dy)
 
-            # Too close → reached
-            if dist <= self.p.pos_eps_mm:
+            # Dynamic threshold based on segment length
+            if self._i + 1 < len(self._wps):
+                nxt = self._wps[self._i + 1]
+                seg_len = math.hypot(nxt.x_mm - tgt.x_mm, nxt.y_mm - tgt.y_mm)
+                # Larger segments allow earlier advancement
+                dynamic_eps = min(self.p.pos_eps_mm * 2.0, seg_len * 0.2)
+            else:
+                dynamic_eps = self.p.pos_eps_mm
+
+            # Directly on waypoint → reached
+            if dist <= dynamic_eps:
                 self._i += 1
                 continue
 
-            # Segment-based reach-ahead check
+            # Segment-based reach-ahead check with adaptive cross-track tolerance
             if self._i + 1 < len(self._wps):
                 nxt = self._wps[self._i + 1]
                 vx = nxt.x_mm - tgt.x_mm
                 vy = nxt.y_mm - tgt.y_mm
                 seg_len = math.hypot(vx, vy)
 
-                if seg_len > 1e-6:
+                if seg_len > self.p.min_segment_length_mm:
                     ux = vx / seg_len
                     uy = vy / seg_len
                     ex = x - tgt.x_mm
                     ey = y - tgt.y_mm
                     along = ex * ux + ey * uy
                     cross = abs(-ex * uy + ey * ux)
+                    
+                    # More lenient cross-track for longer segments
+                    cross_threshold = min(seg_len * 0.15, 6.0 * self.p.pos_eps_mm)
 
-                    if along > 0 and cross <= 4.0 * self.p.pos_eps_mm:
+                    if along > dynamic_eps and cross <= cross_threshold:
                         self._i += 1
                         continue
 
@@ -187,9 +299,12 @@ class PathFollower:
         if not self.active or not self._wps or self._i >= len(self._wps):
             return False, 0.0
 
-        print("USING LATERAL DEV")
-
         (x, y), heading, conf = pose
+        
+        # Outlier rejection
+        if not self._is_pose_valid(x, y):
+            # Skip this pose update but don't stop
+            return False, self._smooth_deviation
 
         self._advance_if_reached(x, y)
         if self._i >= len(self._wps):
@@ -203,12 +318,19 @@ class PathFollower:
 
         tgt = self._wps[self._i]
         dist_to_wp = math.hypot(tgt.x_mm - x, tgt.y_mm - y)
+        
+        # Dynamic arrival threshold
+        if self._i + 1 < len(self._wps):
+            nxt = self._wps[self._i + 1]
+            seg_len = math.hypot(nxt.x_mm - tgt.x_mm, nxt.y_mm - tgt.y_mm)
+            arrival_threshold = min(self.p.pos_eps_mm * 1.5, seg_len * 0.25)
+        else:
+            arrival_threshold = self.p.pos_eps_mm
 
         reached_now = False
-        if dist_to_wp <= self.p.pos_eps_mm:
+        if dist_to_wp <= arrival_threshold:
             self._waypoint_stable_count += 1
             if self._waypoint_stable_count >= self._stable_threshold:
-
                 self.reached_history.append(
                     WaypointReached(
                         waypoint_index=self._i,
@@ -302,10 +424,10 @@ class PathRun:
         self.active = False
         self.path_name: Optional[str] = None
 
-    def load(self, wps: List[Waypoint], path_name: Optional[str] = None) -> None:
+    def load(self, wps: List[Waypoint], path_name: Optional[str] = None, bounds: Optional[Tuple[float, float, float, float]] = None) -> None:
         self.wps = wps or []
         self.path_name = path_name
-        self.follower.load_waypoints(self.wps)
+        self.follower.load_waypoints(self.wps, bounds=bounds)
 
     def start(self) -> None:
         if self.wps:

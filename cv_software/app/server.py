@@ -41,10 +41,14 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
-CORR_MAX_MM = _env_float("CORR_MAX_MM", 3.0)
-CORR_MIN_MM = _env_float("CORR_MIN_MM", 0.5)
-POSE_MAX_AGE_S = _env_float("POSE_MAX_AGE_S", 1.0)
+CORR_MAX_MM = _env_float("CORR_MAX_MM", 5.0)
+CORR_MIN_MM = _env_float("CORR_MIN_MM", 1.0)
+POSE_MAX_AGE_S = _env_float("POSE_MAX_AGE_S", 3.0)
 ALIGN_ENABLE_MM = _env_float("ALIGN_ENABLE_MM", 60.0)
+# When pose is slightly stale (age <= POSE_MAX_AGE_S * CACHED_POSE_MAX_FACTOR)
+# allow a reduced-strength correction instead of skipping completely.
+CACHED_POSE_SCALE = _env_float("CACHED_POSE_SCALE", 0.5)
+CACHED_POSE_MAX_FACTOR = _env_float("CACHED_POSE_MAX_FACTOR", 2.0)
 
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
@@ -433,11 +437,7 @@ def _send_with_cv_correction(
     # Safety tuning: limit per-injection correction magnitude (mm)
     MAX_CORR_MM = CORR_MAX_MM
     MIN_CORR_MM = CORR_MIN_MM
-    # Pose freshness and proximity gating
-    # Use env-configured defaults defined in config section
-    # (POSE_MAX_AGE_S, ALIGN_ENABLE_MM)
-    
-        # Emergency stop: if deviation increases consecutively, stop correcting
+
     MAX_INCREASING_CORRECTIONS = 5
     last_deviation = None
     increasing_count = 0
@@ -448,7 +448,8 @@ def _send_with_cv_correction(
     correction_counter = 0
     corrected_pids = set()
 
-    RUN.load(path_wps)
+    bounds = cvp.get_board_bounds_mm()
+    RUN.load(path_wps, bounds=bounds)
     RUN.start()
     cvp.correction.reset()
 
@@ -532,8 +533,37 @@ def _send_with_cv_correction(
 
         current_idx = RUN.follower.index()
         next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
+        # Compute distance to current target for better diagnostics
+        dist_to_target = None
+        try:
+            tgt = RUN.follower.current_target()
+            pose_dbg = cvp.get_pose_mm()
+            if tgt is not None and pose_dbg:
+                (cx_dbg, cy_dbg), _, _ = pose_dbg
+                dist_to_target = math.hypot(float(tgt.x_mm) - float(cx_dbg), float(tgt.y_mm) - float(cy_dbg))
+        except Exception:
+            dist_to_target = None
+
+        print(
+            f"[CORRECTION] follower at waypoint {current_idx}/{RUN.follower.total()}"
+            + (f" dist_to_target={dist_to_target:.1f}mm" if dist_to_target is not None else "")
+        )
         
-        print(f"[CORRECTION] follower at waypoint {current_idx}/{RUN.follower.total()}")
+        # Verify current target is within bounds
+        try:
+            tgt = RUN.follower.current_target()
+            if tgt is not None:
+                bounds_chk = cvp.get_board_bounds_mm()
+                if bounds_chk:
+                    min_x_chk, min_y_chk, max_x_chk, max_y_chk = bounds_chk
+                    if not (min_x_chk <= tgt.x_mm <= max_x_chk and min_y_chk <= tgt.y_mm <= max_y_chk):
+                        print(
+                            f"[CORRECTION] WARNING: Target waypoint {current_idx} out of bounds: "
+                            f"({tgt.x_mm:.1f},{tgt.y_mm:.1f}) outside [{min_x_chk:.1f}-{max_x_chk:.1f}, {min_y_chk:.1f}-{max_y_chk:.1f}]"
+                        )
+                        return []  # Skip correction for out-of-bounds target
+        except Exception as e_bounds:
+            print(f"[CORRECTION] Bounds check failed: {e_bounds}")
 
         correction = cvp.correction.compute_correction(
             waypoints=fitted_wps,
@@ -542,21 +572,53 @@ def _send_with_cv_correction(
         )
         print(f"[CORRECTION CALLBACK] correction={correction}")
         if correction is None:
+            # Extra diagnostics when the correction engine returns None
+            try:
+                pose_age_dbg = cvp.pose_age_s()
+            except Exception:
+                pose_age_dbg = None
+            try:
+                dev_dbg = cvp.correction.rms_deviation()
+            except Exception:
+                dev_dbg = None
+            print(
+                "[CORRECTION] engine returned None "
+                + (f"pose_age={pose_age_dbg:.2f}s " if pose_age_dbg is not None else "")
+                + (f"rms_dev={dev_dbg:.2f}mm " if dev_dbg is not None else "")
+                + f"idx={current_idx} next_is_g1={next_is_g1}"
+            )
             return []
 
-        # Only skip if pose is very stale or missing
+        # Only skip if pose is missing. If pose exists but is slightly stale,
+        # allow a reduced-strength correction (cached-pose fallback).
         pose = cvp.get_pose_mm()
         if not pose:
             print("[CORRECTION] skipping: no current pose")
             return []
-        
-        # Check pose age only if extremely stale (>3s)
+
         pose_age = cvp.pose_age_s()
-        if pose_age is not None and pose_age > 3.0:
-            print(f"[CORRECTION] skipping: pose very stale ({pose_age:.2f}s > 3.0s)")
-            return []
+        using_cached_pose = False
+        cached_scale = 1.0
+        if pose_age is not None and pose_age > POSE_MAX_AGE_S:
+            # If within allowable cached factor, use reduced-strength correction
+            if pose_age <= (POSE_MAX_AGE_S * CACHED_POSE_MAX_FACTOR):
+                using_cached_pose = True
+                cached_scale = float(CACHED_POSE_SCALE)
+                now = time.time()
+                if now - getattr(cvp, "_last_cached_log", 0.0) > 2.0:
+                    print(
+                        f"[CORRECTION] using cached pose (age={pose_age:.2f}s) — scaling corrections by {cached_scale:.2f}"
+                    )
+                    cvp._last_cached_log = now
+            else:
+                print(f"[CORRECTION] skipping: pose very stale ({pose_age:.2f}s > {POSE_MAX_AGE_S:.2f}s)")
+                return []
 
         bx, by = correction
+        # Scale corrections down when relying on a cached (stale) pose
+        if using_cached_pose and cached_scale != 1.0:
+            bx *= cached_scale
+            by *= cached_scale
         # Clamp very small jitters and very large spikes
         if abs(bx) < MIN_CORR_MM and abs(by) < MIN_CORR_MM:
             return []
@@ -574,7 +636,6 @@ def _send_with_cv_correction(
         if sx == 0 and sy == 0:
             return []
         
-        # Check if we're making things worse
         current_dev = cvp.correction.rms_deviation()
         if last_deviation is not None and current_dev > last_deviation:
             increasing_count += 1
@@ -587,7 +648,6 @@ def _send_with_cv_correction(
             increasing_count = 0
         last_deviation = current_dev
         
-        # Mark this packet as corrected so we don't correct it again
         corrected_pids.add(head_pid)
         print(f"[CORRECTION] Injecting correction for pid={head_pid}, corrected_pids={len(corrected_pids)}")
         
@@ -719,6 +779,9 @@ def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800
         path = graph2path(graph, endpoints, canvas_size=canvas_size)
         os.makedirs(os.path.dirname(out_gcode_path), exist_ok=True)
         path2gcode(path, filename=out_gcode_path)
+        print(f"GCODE GENERATED: {out_gcode_path}")
+        for line in open(out_gcode_path, "r", encoding="utf-8"):
+            print(f"GCODE: {line.strip()}")
 
     return out_gcode_path
 
@@ -847,13 +910,13 @@ def overlay_fn():
     def _draw(frame):
         st = cvp.get_state()
         line1 = f"Mode: {STATE['mode'].upper()}"
-        if st["calibrated"]:
-            try:
-                line1 += f" | reproj: {st['board_reproj_err_px']:.2f}"
-            except Exception:
-                pass
-        else:
-            line1 += " | CALIBRATING..."
+        # if st["calibrated"]:
+        #     try:
+        #         line1 += f" | reproj: {st['board_reproj_err_px']:.2f}"
+        #     except Exception:
+        #         pass
+        # else:
+        #     line1 += " | CALIBRATING..."
         run_txt = f"Run: {'ON' if RUN.active else 'OFF'} {RUN.follower.index()}/{RUN.follower.total()}"
         line2 = f"Rate: {MET.rate_hz():.1f} Hz | Median cam→pose: {MET.median_latency_ms():.0f} ms | Uptime: {MET.uptime_pct:.1f}% | {run_txt}"
         cv2.putText(frame, line1, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
@@ -1012,8 +1075,11 @@ def draw():
                     gcode_str = _read_gcode_text(src_for_gcode)
                     print(f"Sending G-code from {src_for_gcode}...")
                     
-                    # Use actual bot position from CV as starting point
-                    bot_pose = cvp.get_pose_mm()
+                    # Use actual bot position from CV as starting point (retry up to 10s)
+                    bot_pose = _wait_for_pose(10.0)
+                    if not bot_pose:
+                        # final fallback to immediate read
+                        bot_pose = cvp.get_pose_mm()
                     if bot_pose:
                         (bot_x, bot_y), _, _ = bot_pose
                         start_pos = (bot_x, bot_y)
