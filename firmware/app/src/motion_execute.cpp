@@ -80,10 +80,16 @@ void MotionExecutor::processCommands() {
     cmd.print();
     #endif
 
+    uint8_t prev_packet_id = current_packet_id_;
     current_packet_id_ = cmd.packet_id();
 
     switch (cmd.device()) {
         case Device::Steppers:
+            #ifdef DEBUG_NAV
+            if (current_packet_id_ != prev_packet_id) {
+                printk("Executing move (packet %d)\n", current_packet_id_);
+            }
+            #endif
             executeStepperCommand(cmd);
             break;
 
@@ -192,15 +198,7 @@ void MotionExecutor::sendAck(uint8_t packet_id) {
         char ack[sizeof("aok\n")] = "aok\n";
         ack[0] = packet_id;
 
-        #ifdef DEBUG_NAV
-        printk("MotionExecutor: Sending ACK for packet ID %d\n", packet_id);
-        #endif
-
         g_bleService->send(ack, sizeof(ack));
-    } else {
-        #ifdef DEBUG_NAV
-        printk("MotionExecutor: Skipping duplicate ACK for packet ID %d\n", packet_id);
-        #endif
     }
 }
 
@@ -216,10 +214,6 @@ void MotionExecutor::sendFinalAck() {
 
         char ack[sizeof("aok\n")] = "aok\n";
         ack[0] = current_packet_id_;
-
-        #ifdef DEBUG_NAV
-        printk("MotionExecutor: Sending FINAL ACK for packet ID %d\n", current_packet_id_);
-        #endif
 
         g_bleService->send(ack, sizeof(ack));
     }

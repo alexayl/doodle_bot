@@ -191,9 +191,6 @@ MotionPlanner::Output MotionPlanner::consumeGcode(const InstructionParser::GCode
 
     // Command router
     if (current_gcode_cmd_.code == 'G' && current_gcode_cmd_.number == 1) {
-        #ifdef DEBUG_NAV
-        printk("MotionPlanner::consumeGcode - routing G1 command\n");
-        #endif
         consumeLocomotion();
 
     } else if (current_gcode_cmd_.code == 'M' && current_gcode_cmd_.number == 280) {
@@ -220,10 +217,6 @@ void MotionPlanner::reset() {
     theta_current_ = 0.0f;
     clearOutput();
     k_msgq_purge(&nav_queue_);
-    
-    #ifdef DEBUG_NAV
-    printk("MotionPlanner: State reset\n");
-    #endif
 }
 
 
@@ -240,17 +233,9 @@ void motion_plan_thread(void *gcode_cmd_msgq_void, void *execute_cmd_msgq_void, 
     InstructionParser::GCodeCmd current_instruction;
     MotionPlanner motionPlanner;
 
-    #ifdef DEBUG_NAV
-    printk("Motion plan thread started\n");
-    #endif
-
     while (1) {
         // Block until message arrives
         k_msgq_get(gcode_cmd_msgq, &current_instruction, K_FOREVER);
-        
-        #ifdef DEBUG_NAV
-        printk("Nav thread received %c%d command\n", current_instruction.code, current_instruction.number);
-        #endif
 
         // Preprocess the gcode command
         MotionPlanner::Output execution_cmds = motionPlanner.consumeGcode(current_instruction);

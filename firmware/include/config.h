@@ -2,10 +2,10 @@
 
 // #define DEBUG_BLE
 // #define DEBUG_INSTRUCTION_PARSER
-// #define DEBUG_NAV
+#define DEBUG_NAV
 // #define DEBUG_MOTION
 // #define DEBUG_INTERPOLATE
-// #define DEBUG_SERVO
+#define DEBUG_SERVO
 
 #define WHEEL_DIAMETER          (46.27f)
 #define WHEELBASE               (148.25f)

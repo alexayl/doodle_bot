@@ -23,7 +23,7 @@ default_commands = [
     b"G1 X-50 Y0\n",    # Left side
     b"M280 P0 S0\n",
     b"G1 X0 Y-50\n",    # Bottom side (back to start)
-    b"M280 P0 S0\n",    # Marker UP (stop drawing)
+    b"M280 P0 S40\n",    # Marker UP (stop drawing)
 ]
 
 servo_test_commands = [
