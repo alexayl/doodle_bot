@@ -33,7 +33,7 @@ public:
         void print() const {
             printk("GCodeCmd: code=%c, number=%d, argc=%d\n", code, number, argc);
             for (uint8_t i = 0; i < argc; i++) {
-                printk("  Arg %d: %c = %f\n", i, args[i].letter, args[i].value);
+                printk("  Arg %d: %c = %f\n", i, args[i].letter, (double)args[i].value);
             }
         }
     };

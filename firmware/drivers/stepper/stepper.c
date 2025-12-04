@@ -84,7 +84,6 @@ static uint32_t gpio_pulse_count = 0;
 /* PWM cycle tracking for precise debugging */
 static uint32_t expected_pwm_cycles = 0;
 static uint32_t movement_start_time = 0;
-static uint32_t current_step_freq_hz = 0;
 static uint32_t movement_step_freq_hz = 0;  /* Frequency during movement for calculations */
 static bool step_counting_enabled = false;
 static uint32_t current_movement_steps = 0;

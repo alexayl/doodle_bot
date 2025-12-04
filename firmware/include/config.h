@@ -3,11 +3,12 @@
 // #define DEBUG_BLE
 // #define DEBUG_INSTRUCTION_PARSER
 // #define DEBUG_NAV
-#define DEBUG_MOTION
-#define DEBUG_INTERPOLATE
+// #define DEBUG_MOTION
+// #define DEBUG_INTERPOLATE
+// #define DEBUG_SERVO
 
-#define WHEEL_DIAMETER          (46.27)
-#define WHEELBASE               (148.25)
+#define WHEEL_DIAMETER          (46.27f)
+#define WHEELBASE               (148.25f)
 
 #define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
 #define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence
