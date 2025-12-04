@@ -20,14 +20,33 @@ struct NavCommand {
     float theta;      // angle to change
 };
 
-// signed velocity command for each stepper motor deg/s
+// Command type for step queue
+enum class StepCommandType : uint8_t {
+    STEPPER = 0,    // Normal stepper velocity command
+    SERVO = 1,      // Servo position command
+};
+
+// Command for step queue - can be stepper velocity or servo position
 struct StepCommand {
     uint8_t packet_id;
-    int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
-    int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
+    StepCommandType type;
+    union {
+        struct {
+            int16_t left_velocity;   // signed velocity: positive = forward, negative = backward
+            int16_t right_velocity;  // signed velocity: positive = forward, negative = backward
+        } stepper;
+        struct {
+            uint8_t servo_id;        // 0 = marker, 1 = eraser
+            uint8_t angle;           // servo angle (0-180)
+        } servo;
+    };
 
     void print() const {
-        printk("StepCommand: left_velocity=%d, right_velocity=%d\n", left_velocity, right_velocity);
+        if (type == StepCommandType::STEPPER) {
+            printk("StepCommand: left_velocity=%d, right_velocity=%d\n", stepper.left_velocity, stepper.right_velocity);
+        } else {
+            printk("StepCommand: servo_id=%d, angle=%d\n", servo.servo_id, servo.angle);
+        }
     }
 };
 

@@ -14,6 +14,10 @@ k_msgq* MotionPlanner::step_queue_ = nullptr;
 Stepper MotionPlanner::stepper_left_(STEPPER_LEFT);
 Stepper MotionPlanner::stepper_right_(STEPPER_RIGHT);
 
+// Static servo instances for use by motor control handler
+static Servo g_servo_marker("servom");
+static Servo g_servo_eraser("servoe");
+
 // Track which packet IDs have been acknowledged
 static uint8_t last_acked_packet_id = 255;  // Initialize to invalid packet ID
 static uint8_t current_packet_id = 0;       // Track the currently processing packet ID
@@ -35,6 +39,7 @@ int MotionPlanner::interpolate(int x_delta, int y_delta,
 
     // See docs/firmware/differential_drive_kinematics.md for derivation
 
+    // TODO: going to have to be reset soon 
     static int x_prev, y_prev;
 
     float r_delta = sqrtf((float)((x_delta) * (x_delta) + (y_delta) * (y_delta)));
@@ -145,8 +150,9 @@ int MotionPlanner::discretize(const NavCommand& nav_command,
         // step 5
         StepCommand step_command;
         step_command.packet_id = packet_id;
-        step_command.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
-        step_command.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+        step_command.type = StepCommandType::STEPPER;
+        step_command.stepper.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
+        step_command.stepper.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
         
         output_fn(step_command);
 
@@ -235,8 +241,22 @@ static void motor_control_work_handler(struct k_work *work) {
     #ifdef DEBUG_MOTION
     step_command.print();
     #endif
-    MotionPlanner::stepper_left_.setVelocity(step_command.left_velocity);
-    MotionPlanner::stepper_right_.setVelocity(step_command.right_velocity);
+
+    // Handle command based on type
+    if (step_command.type == StepCommandType::SERVO) {
+        // Execute servo command
+        printk("MOTOR_CTRL: Executing SERVO command - servo_id=%d, angle=%d\n", 
+               step_command.servo.servo_id, step_command.servo.angle);
+        if (step_command.servo.servo_id == 0) {
+            g_servo_marker.setAngle(step_command.servo.angle);
+        } else {
+            g_servo_eraser.setAngle(step_command.servo.angle);
+        }
+    } else {
+        // Execute stepper command
+        MotionPlanner::stepper_left_.setVelocity(step_command.stepper.left_velocity);
+        MotionPlanner::stepper_right_.setVelocity(step_command.stepper.right_velocity);
+    }
 
     // Send ACK with packet ID as first byte, but only once per packet ID
     if (g_bleService && (step_command.packet_id != last_acked_packet_id)) {
@@ -265,31 +285,37 @@ void MotionPlanner::reset_state() {
 /* SERVO */
 
 int ServoMover::consumeInstruction(const InstructionParser::GCodeCmd &gCodeCmd) {
-    int ret = 0;
-
-    // consume servo instruction
-    if (gCodeCmd.args[0].letter == 'P') {
-        int servo_position = (int)gCodeCmd.args[1].value;
-        #ifdef DEBUG_NAV
-        printk("ServoMover: Moving servo %s to position %d\n", servo_.getAlias(), servo_position);
-        #endif
-        servo_.setAngle(servo_position);
-    } else {
+    // Queue a servo command to be executed in sequence with stepper commands
+    if (gCodeCmd.args[0].letter != 'P') {
         printk("ServoMover: Unrecognized argument letter %c\n", gCodeCmd.args[0].letter);
-        ret = -EINVAL;
-    }
-    
-    // send ack command back
-    if (g_bleService) {
-        char ack[sizeof("aok\n")] = "aok\n";
-        ack[0] = gCodeCmd.packet_id;
-        #ifdef DEBUG_NAV
-        printk("SERVO: Sending ACK for packet ID %d\n", gCodeCmd.packet_id);
-        #endif
-        g_bleService->send(ack, sizeof(ack));
+        return -EINVAL;
     }
 
-    return ret;
+    uint8_t servo_id = (uint8_t)gCodeCmd.args[0].value;  // P0 = marker, P1 = eraser
+    uint8_t angle = (uint8_t)gCodeCmd.args[1].value;     // S value = angle
+
+    printk("ServoMover: Queueing servo %d to angle %d (packet_id=%d)\n", servo_id, angle, gCodeCmd.packet_id);
+
+    // Create servo step command
+    StepCommand step_command;
+    step_command.packet_id = gCodeCmd.packet_id;
+    step_command.type = StepCommandType::SERVO;
+    step_command.servo.servo_id = servo_id;
+    step_command.servo.angle = angle;
+
+    // Queue it
+    int ret = k_msgq_put(MotionPlanner::step_queue_, &step_command, K_FOREVER);
+    printk("ServoMover: Queue put returned %d, queue has %d items\n", ret, k_msgq_num_used_get(MotionPlanner::step_queue_));
+
+    // Start the motor control timer if not already running
+    if (!k_timer_remaining_ticks(&motor_control_timer)) {
+        printk("ServoMover: Starting motor control timer\n");
+        k_timer_start(&motor_control_timer, K_NO_WAIT, K_MSEC(STEPPER_CTRL_PERIOD * 1000));
+    } else {
+        printk("ServoMover: Timer already running\n");
+    }
+
+    return 0;
 }
 
 

@@ -26,6 +26,8 @@ class BLEPacketHandler:
         self.last_received_message: Optional[str] = None
         self.client: Optional[BleakClient] = None
         self.timeout: float = 60.0  # Increased to 60 seconds for large movements
+        self.ack_event: Optional[asyncio.Event] = None
+        self.pending_acks: dict = {}  # packet_id -> (command_index, command_bytes, send_time)
         
     def get_next_packet_id(self) -> int:
         """Generate sequential packet ID with automatic wraparound at 255."""
@@ -88,6 +90,10 @@ class BLEPacketHandler:
             self.last_received_message = None
         
         self.response_received = True
+        
+        # Signal windowed sender if active
+        if self.ack_event:
+            self.ack_event.set()
 
     async def send_packet(self, command_bytes: bytes, max_retries: int = 3):
         """
@@ -133,9 +139,59 @@ class BLEPacketHandler:
         
         
 
-    async def send_packets(self, all_commands):
+    async def send_packets(self, all_commands, window_size: int = 5):
         """
-        Send multiple packets in sequence.
+        Send multiple packets with a sliding window approach.
+        Keeps up to window_size commands in flight at a time.
         """
-        for command in all_commands:
-            await self.send_packet(command)
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("Not connected to BLE device")
+        
+        total_commands = len(all_commands)
+        next_to_send = 0  # Index of next command to send
+        self.pending_acks = {}  # packet_id -> (command_index, command_bytes)
+        completed = 0
+        
+        # Create event for ACK signaling
+        self.ack_event = asyncio.Event()
+        
+        try:
+            while completed < total_commands:
+                # Send commands up to window size
+                while len(self.pending_acks) < window_size and next_to_send < total_commands:
+                    command = all_commands[next_to_send]
+                    packet_with_id = self.create_packet_with_id(command)
+                    packet_id = packet_with_id[0]
+                    
+                    await self.client.write_gatt_char(RX_CHAR_UUID, packet_with_id)
+                    print(f"SEND pid:{packet_id} cmd:{command.decode().strip()} [{next_to_send+1}/{total_commands}] (in-flight: {len(self.pending_acks)+1})")
+                    
+                    self.pending_acks[packet_id] = (next_to_send, command)
+                    next_to_send += 1
+                
+                # Wait for an ACK
+                self.ack_event.clear()
+                try:
+                    await asyncio.wait_for(self.ack_event.wait(), timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    print(f"Timeout waiting for ACK, {len(self.pending_acks)} commands pending")
+                    break
+                
+                # Check if we got a valid ACK for a pending command
+                if self.last_received_packet_id in self.pending_acks:
+                    if self.last_received_message == "ok":
+                        idx, cmd = self.pending_acks.pop(self.last_received_packet_id)
+                        completed += 1
+                        print(f"ACK pid:{self.last_received_packet_id} [{completed}/{total_commands}] (in-flight: {len(self.pending_acks)})")
+                    else:
+                        print(f"NACK pid:{self.last_received_packet_id} msg:'{self.last_received_message}'")
+                        # Remove from pending and count as completed (or could retry)
+                        self.pending_acks.pop(self.last_received_packet_id, None)
+                        completed += 1
+                else:
+                    # ACK for unknown packet, might be duplicate
+                    print(f"ACK for unknown pid:{self.last_received_packet_id}")
+                    
+        finally:
+            self.ack_event = None
+            self.pending_acks = {}
