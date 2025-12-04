@@ -3,7 +3,7 @@
 #include "comms_thread.h"
 #include "instruction_parser.h"
 #include "ble_service.h"
-#include "navigation.h"
+#include "motion_plan.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>

@@ -14,13 +14,16 @@ from packetlib import BLEPacketHandler
 DEVICE_NAME = "BOO"
 
 default_commands = [
-    b"M280 P1 S50\n",
-    b"G1 X20 Y0\n",
+    # Draw a 50mm square
+    b"M280 P0 S40\n",   # Marker DOWN (start drawing)
+    b"G1 X50 Y0\n",     # Right side
     b"M280 P0 S0\n",
-    b"G1 X0 Y100\n", 
-    b"G1 X-100 Y0\n",
-    b"G1 X0 Y-100\n",
+    b"G1 X0 Y50\n",     # Top side
+    b"M280 P0 S40\n",
+    b"G1 X-50 Y0\n",    # Left side
     b"M280 P0 S0\n",
+    b"G1 X0 Y-50\n",    # Bottom side (back to start)
+    b"M280 P0 S0\n",    # Marker UP (stop drawing)
 ]
 
 servo_test_commands = [
@@ -111,7 +114,7 @@ esap5_commands = [
     b"G1 X-10 Y10\n",
 ]
 
-commands_to_send = esap5_commands
+commands_to_send = default_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """
