@@ -7,7 +7,6 @@
 #include "motion_plan.h"
 #include "motion_execute.h"
 #include "state_task.h"
-#include "stepper.h"
 #include "config.h"
 
 
@@ -38,16 +37,9 @@ static struct k_thread state_thread_data;
 /* HARDWARE INITIALIZATION */
 
 static int hardware_init() {
-   
-    // TODO: init hardware peripherals as they are added
-        int ret = stepper_init();
-    if (ret < 0) {
-        printk("ERROR: Stepper initialization failed: %d\n", ret);
-        return ret;
-    }
-
+    // Stepper motors are auto-initialized via Zephyr's device model (devicetree)
+    // Servo, LED, Buzzer initialization is handled by their respective wrappers
     printk("Hardware initialized successfully\n");
-    
     return 0;
 }
 

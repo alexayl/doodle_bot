@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 DoodleBot
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  A4988 microstepping stepper motor driver.
+  A4988 is a microstepping motor driver with built-in translator for easy operation.
+  It is designed to operate bipolar stepper motors in full-, half-, quarter-, eighth-,
+  and sixteenth-step modes.
+
+  The microstep resolution is typically hardwired via MS1/MS2/MS3 pins, so this driver
+  does not control them via GPIO (unlike A4979 or DRV84xx).
+
+  Example:
+  stepper_left: stepper_left {
+      status = "okay";
+      compatible = "doodle,a4988-stepper";
+      micro-step-res = <16>;
+      invert-direction;
+      dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+      step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+      en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;
+      counter = <&counter0>;
+  };
+
+compatible: "doodle,a4988-stepper"
+
+include:
+  - name: stepper-controller.yaml
+
+properties:
+  step-gpios:
+    required: true
+
+  dir-gpios:
+    required: true
+
+  en-gpios:
+    required: true
+

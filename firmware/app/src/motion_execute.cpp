@@ -17,10 +17,21 @@ MotionExecutor::MotionExecutor() : servo_marker_("servom"), servo_eraser_("servo
 void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
     switch (cmd.device()) {
         case Device::Steppers:
+            #ifdef DEBUG_MOTION_EXECUTION
+            printk("[EXEC] G1 - Begin stepper move (L:%d R:%d deg/s)\n", cmd.steppers().left_velocity, cmd.steppers().right_velocity);
+            #endif
             executeStepperCommand(cmd);
             break;
         case Device::MarkerServo:
+            #ifdef DEBUG_MOTION_EXECUTION
+            printk("[EXEC] M280 P0 S%d - Begin marker servo move\n", cmd.servo().angle);
+            #endif
+            executeServoCommand(cmd);
+            break;
         case Device::EraserServo:
+            #ifdef DEBUG_MOTION_EXECUTION
+            printk("[EXEC] M280 P1 S%d - Begin eraser servo move\n", cmd.servo().angle);
+            #endif
             executeServoCommand(cmd);
             break;
         default:
@@ -37,13 +48,20 @@ void MotionExecutor::executeStepperCommand(const ExecuteCommand& cmd) {
     stepper_right_.setVelocity(0);
 }
 
+// Time for servo to reach position (ms) - typical hobby servo is ~200ms for full sweep
+#define SERVO_SETTLE_TIME_MS 200
+
 void MotionExecutor::executeServoCommand(const ExecuteCommand& cmd) {
     const auto& servo = cmd.servo();
+
     if (servo.servo_id == 0) {
         servo_marker_.setAngle(servo.angle);
     } else {
         servo_eraser_.setAngle(servo.angle);
     }
+    
+    // Wait for servo to physically reach position
+    k_sleep(K_MSEC(SERVO_SETTLE_TIME_MS));
 }
 
 void MotionExecutor::reset() {
@@ -51,7 +69,9 @@ void MotionExecutor::reset() {
     stepper_right_.stop();
 }
 
-// --- Thread ---
+// ---------------------
+// Motion Execute Thread
+// ---------------------
 
 #define PACKET_ACK_TIMEOUT_MS 500
 

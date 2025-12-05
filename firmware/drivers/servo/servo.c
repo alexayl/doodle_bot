@@ -47,7 +47,7 @@ int servo_set_angle(const struct device *dev, uint8_t angle)
         
     int ret = pwm_set_dt(&config->pwm, PWM_USEC(period), PWM_USEC(pulse));
 #ifdef DEBUG_SERVO
-    printk("SERVO: angle=%d, pulse=%u us, period=%u us, ret=%d\n", angle, pulse, period, ret);
+    printk("SERVO[%s]: angle=%d, pulse=%u us, ret=%d\n", config->pwm.dev->name, angle, pulse, ret);
 #endif
     return ret;
 }

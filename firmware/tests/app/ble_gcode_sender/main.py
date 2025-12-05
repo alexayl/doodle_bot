@@ -13,105 +13,24 @@ from packetlib import BLEPacketHandler
 
 DEVICE_NAME = "BOO"
 
+# this works
+servo_alternate_commands = [
+    b"M280 P0 S0\n",
+    b"M280 P0 S40\n",
+    b"M280 P0 S0\n",
+    b"M280 P0 S40\n",
+]
+
 default_commands = [
-    # Draw a 50mm square
-    b"M280 P0 S40\n",   # Marker DOWN (start drawing)
-    b"G1 X50 Y0\n",     # Right side
-    b"M280 P0 S0\n",
-    b"G1 X0 Y50\n",     # Top side
     b"M280 P0 S40\n",
-    b"G1 X-50 Y0\n",    # Left side
+    b"G1 X100 Y0\n",
     b"M280 P0 S0\n",
-    b"G1 X0 Y-50\n",    # Bottom side (back to start)
-    b"M280 P0 S40\n",    # Marker UP (stop drawing)
-]
-
-servo_test_commands = [
-    b"M280 P0 S50\n",
-    b"M280 P1 S0\n",
-    # b"M280 P0 S45\n",
-    # b"M280 P0 S90\n",
-    # b"M280 P0 S135\n",
-]
-
-dashed_line_commands = [
-    b"M280 P0 S40\n",    # Marker DOWN (draw)
-    b"G1 X20 Y0\n",      # Move while drawing
-    b"M280 P0 S0\n",     # Marker UP (stop drawing)
-    b"G1 X20 Y0\n",      # Move without drawing
-    b"M280 P0 S40\n",    # Marker DOWN (draw)
-    b"G1 X20 Y0\n",
-    b"M280 P0 S0\n",     # Marker UP
-    b"G1 X20 Y0\n",
-    b"M280 P0 S40\n",    # Marker DOWN (draw)
-    b"G1 X20 Y0\n",
-    b"M280 P0 S0\n",     # Marker UP
-    b"G1 X20 Y0\n",
-    b"M280 P0 S40\n",    # Marker DOWN (draw)
-    b"G1 X20 Y0\n",
-    b"M280 P0 S0\n",     # Marker UP (end lifted)
-]
-
-esap5_commands = [
-    b"M280 P0 S0\n",
-    b"G1 X45 Y503 \n",
+    b"G1 X0 Y100\n",
     b"M280 P0 S40\n",
-    b"G1 X-30 Y0\n",
-    b"G1 X-5 Y5\n",
-    b"G1 X-15 Y0\n",
-    b"G1 X-10 Y-10\n",
-    b"G1 X0 Y-20\n",
-    b"G1 X10 Y-10\n",
-    b"G1 X20 Y0\n",
-    b"G1 X5 Y5\n",
-    b"G1 X20 Y0\n",
-    b"G1 X10 Y10\n",
-    b"G1 X0 Y15\n",
-    b"G1 X5 Y5\n",
+    b"G1 X-100 Y0\n",
     b"M280 P0 S0\n",
-    b"G1 X40 Y-20\n",   
-    b"M280 P0 S40\n",
-    b"G1 X0 Y5\n",
-    b"G1 X5 Y5\n",
-    b"G1 X0 Y5\n",
-    b"G1 X0 Y5\n",
-    b"G1 X5 Y5\n",
-    b"G1 X0 Y5\n",
-    b"G1 X5 Y5\n",
-    b"G1 X80 Y0\n",
-    b"G1 X10 Y10\n",
-    b"G1 X0 Y25\n",
-    b"G1 X-5 Y5\n",
-    b"G1 X-90 Y0\n",
-    b"G1 X-5 Y-5\n",
-    b"G1 X0 Y-10\n",    
-    b"G1 X-5 Y-5\n",
-    b"G1 X0 Y-15\n",
-    b"G1 X-5 Y-5\n",
-    b"G1 X0 Y-15\n",
-    b"G1 X-5 Y-5\n",
-    b"G1 X0 Y-40\n",
-    b"G1 X-5 Y-5\n",
-    b"G1 X0 Y-10\n",
-    b"G1 X10 Y-10\n",
-    b"G1 X135 Y0\n",
-    b"M280 P0 S0\n",
-    b"G1 X5 Y-15\n",
-    b"M280 P0 S40\n",
-    b"G1 X0 Y10\n",
-    b"G1 X5 Y5\n",
-    b"G1 X40 Y0\n",
-    b"G1 X5 Y5\n",
-    b"G1 X30 Y0\n",
-    b"G1 X5 Y-5\n",
-    b"G1 X15 Y0\n",
-    b"G1 X5 Y5\n",
-    b"G1 X5 Y0\n",
-    b"G1 X10 Y10\n",
-    b"G1 X0 Y15\n",
-    b"G1 X5 Y5\n",
-    b"G1 X0 Y10\n",
-    b"G1 X-10 Y10\n",
+    b"G1 X0 Y-100\n",
+    # b"M280 P0 S40\n",
 ]
 
 commands_to_send = default_commands
