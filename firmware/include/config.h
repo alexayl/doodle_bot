@@ -1,9 +1,9 @@
 #pragma once
 
-// #define DEBUG_BLE
+#define DEBUG_BLE
 // #define DEBUG_INSTRUCTION_PARSER
 #define DEBUG_NAV
-// #define DEBUG_MOTION
+#define DEBUG_MOTION_EXECUTION
 // #define DEBUG_INTERPOLATE
 #define DEBUG_SERVO
 

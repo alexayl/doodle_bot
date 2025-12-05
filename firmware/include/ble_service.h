@@ -33,10 +33,18 @@ public:
 	 * @brief Sends data over the BLE connection (tx characteristic)
 	 * @param data Pointer to the data to send.
 	 * @param len Length of the data to send.
-	 * 
-	 * TODO: Could be extended to support std::string
 	 */
-    void send(const char *data, size_t len); 
+    void send(const char *data, size_t len);
+
+	/**
+	 * @brief Queue an ACK to be sent with rate limiting.
+	 * 
+	 * ACKs are queued and sent with delays to prevent overwhelming
+	 * the receiver's single-threaded ACK handler.
+	 * 
+	 * @param packet_id The packet ID to acknowledge.
+	 */
+	void queueAck(uint8_t packet_id); 
 	
 	/**
 	 * @brief Called when new message received (rx characteristic) and maps it
@@ -56,6 +64,11 @@ public:
     static void connected(struct bt_conn *conn, uint8_t err);
     static void disconnected(struct bt_conn *conn, uint8_t reason);
     static BleService* instance;
+
+	/**
+	 * @brief Initialize the ACK work queue (call once at startup).
+	 */
+	static void initAckQueue();
 
 private:
 	// Instance members for handling message I/O

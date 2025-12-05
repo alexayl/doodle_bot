@@ -97,36 +97,26 @@ private:
 /**
  * @brief Motion Executor class
  * 
- * Handles execution of motion commands using timer-based control for steppers
- * and direct execution for servos. Sends ACKs over BLE when commands complete.
+ * Handles execution of motion commands: stepper velocity control
+ * and servo angle control. ACKs are managed by the motion execute thread
+ * via BleService::queueAck().
  */
 class MotionExecutor {
 public:
     MotionExecutor();
 
     /**
-     * @brief Initialize the executor with the command queue
-     * @param execute_cmd_queue Queue to receive ExecuteCommand objects from
-     */
-    void init(struct k_msgq *execute_cmd_queue);
-
-    /**
      * @brief Process incoming commands from the queue
      * Called by the motion execute thread
      */
-    void processCommands();
+    void consumeCommands(const ExecuteCommand& cmd);
 
     /**
-     * @brief Timer callback handler - executes stepper commands at control frequency
-     */
-    void timerHandler();
-
-    /**
-     * @brief Reset executor state
+     * @brief Reset executor state (stop all motors)
      */
     void reset();
 
-    // Static accessors for hardware (used by timer callback)
+    // Static accessors for hardware
     static Stepper& stepperLeft() { return stepper_left_; }
     static Stepper& stepperRight() { return stepper_right_; }
 
@@ -137,31 +127,11 @@ private:
     Servo servo_marker_;
     Servo servo_eraser_;
 
-    // Command queue
-    struct k_msgq *execute_cmd_queue_;
-
-    // Internal step queue for rate-limited execution
-    char step_queue_buffer_[MESSAGES_PER_QUEUE * sizeof(ExecuteCommand)] __aligned(4);
-    struct k_msgq step_queue_;
-
-    // ACK tracking
-    uint8_t last_acked_packet_id_;
-    uint8_t current_packet_id_;
-
     // Helper methods
     void executeStepperCommand(const ExecuteCommand& cmd);
     void executeServoCommand(const ExecuteCommand& cmd);
-    void sendAck(uint8_t packet_id);
-    void sendFinalAck();
-    void startTimer();
-    void stopTimer();
 };
 
-// Global executor instance (needed for timer callback)
-extern MotionExecutor g_motionExecutor;
-
-// Timer declaration
-extern struct k_timer motor_control_timer;
 
 /**
  * @brief Motion execute thread entry point

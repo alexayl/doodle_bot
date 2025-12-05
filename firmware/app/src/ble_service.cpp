@@ -5,6 +5,42 @@
 #include <stdio.h>
 
 
+/* ACK QUEUE CONFIGURATION */
+
+#define ACK_QUEUE_SIZE 16
+#define ACK_DELAY_MS 100  // Minimum delay between ACKs (100ms for reliable BLE)
+
+// Queue to hold pending ACK packet IDs
+K_MSGQ_DEFINE(ack_queue, sizeof(uint8_t), ACK_QUEUE_SIZE, 1);
+
+// Delayed work for sending ACKs
+static struct k_work_delayable ack_work;
+
+static void ack_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+    uint8_t pid;
+    
+    // Get next ACK from queue
+    if (k_msgq_get(&ack_queue, &pid, K_NO_WAIT) == 0) {
+        if (BleService::instance != nullptr) {
+            char ack[sizeof("aok\n")] = "aok\n";
+            ack[0] = pid;
+            
+            #ifdef DEBUG_BLE
+            printk("BLE_ACK: Sending ACK for pid=%d\n", pid);
+            #endif
+            
+            BleService::instance->send(ack, sizeof(ack));
+        }
+        
+        // If more ACKs pending, schedule next one with delay
+        if (k_msgq_num_used_get(&ack_queue) > 0) {
+            k_work_schedule(&ack_work, K_MSEC(ACK_DELAY_MS));
+        }
+    }
+}
+
+
 /* STATIC MEMBER DEFINITIONS */
 
 // Static instance pointer for callbacks
@@ -148,4 +184,23 @@ void BleService::receive(const void *data, uint16_t len) {
         printk("BLE_RECEIVE::ERROR: No receive handler specified\n");
         #endif
     }
+}
+
+void BleService::initAckQueue() {
+    k_work_init_delayable(&ack_work, ack_work_handler);
+}
+
+void BleService::queueAck(uint8_t packet_id) {
+    #ifdef DEBUG_BLE
+    printk("BLE_ACK: Queuing ACK for pid=%d\n", packet_id);
+    #endif
+    
+    // Add to queue (non-blocking)
+    if (k_msgq_put(&ack_queue, &packet_id, K_NO_WAIT) != 0) {
+        printk("BLE_ACK: Queue full, dropping ACK for pid=%d\n", packet_id);
+        return;
+    }
+    
+    // Schedule work if not already scheduled
+    k_work_schedule(&ack_work, K_MSEC(ACK_DELAY_MS));
 }

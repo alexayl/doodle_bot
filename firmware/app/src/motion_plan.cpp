@@ -234,13 +234,13 @@ void motion_plan_thread(void *gcode_cmd_msgq_void, void *execute_cmd_msgq_void, 
     MotionPlanner motionPlanner;
 
     while (1) {
-        // Block until message arrives
+        // block until message arrives
         k_msgq_get(gcode_cmd_msgq, &current_instruction, K_FOREVER);
 
-        // Preprocess the gcode command
+        // preprocess the gcode command
         MotionPlanner::Output execution_cmds = motionPlanner.consumeGcode(current_instruction);
 
-        // Send outputs to execution thread
+        // send outputs to execution thread
         for (size_t i = 0; i < execution_cmds.count; i++) {
             k_msgq_put(execute_cmd_msgq, &execution_cmds.cmds[i], K_FOREVER);
         }
