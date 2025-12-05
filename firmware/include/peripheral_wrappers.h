@@ -46,8 +46,8 @@ private:
     const struct device* dev_;
 };
 
-#define STEPPER_LEFT  DEVICE_DT_GET_OR_NULL(DT_NODELABEL(stepper_left))
-#define STEPPER_RIGHT DEVICE_DT_GET_OR_NULL(DT_NODELABEL(stepper_right))
+#define STEPPER_LEFT  DEVICE_DT_GET_OR_NULL(DT_NODELABEL(stepper_right))
+#define STEPPER_RIGHT DEVICE_DT_GET_OR_NULL(DT_NODELABEL(stepper_left))
 
 class Servo : public Peripheral {
 public:

@@ -29,11 +29,32 @@ default_commands = [
     b"M280 P0 S40\n",
     b"G1 X-100 Y0\n",
     b"M280 P0 S0\n",
-    b"G1 X0 Y-100\n",
+    # b"G1 X0 Y-100\n",
     # b"M280 P0 S40\n",
 ]
 
-commands_to_send = default_commands
+draw_a_square_commands = [
+    b"M280 P0 S40\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"M280 P0 S0\n",
+
+]
+commands_to_send = draw_a_square_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """
