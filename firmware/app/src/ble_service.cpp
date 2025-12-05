@@ -195,12 +195,28 @@ void BleService::queueAck(uint8_t packet_id) {
     printk("BLE_ACK: Queuing ACK for pid=%d\n", packet_id);
     #endif
     
-    // Add to queue (non-blocking)
     if (k_msgq_put(&ack_queue, &packet_id, K_NO_WAIT) != 0) {
         printk("BLE_ACK: Queue full, dropping ACK for pid=%d\n", packet_id);
         return;
     }
-    
-    // Schedule work if not already scheduled
     k_work_schedule(&ack_work, K_MSEC(ACK_DELAY_MS));
+}
+
+
+/* PACKET ACK TRACKER */
+
+void PacketAckTracker::onCommand(uint8_t packet_id) {
+    if (has_prev_ && packet_id != last_id_ && g_bleService != nullptr) {
+        g_bleService->queueAck(last_id_);
+    }
+    last_id_ = packet_id;
+    has_prev_ = true;
+    acked_ = false;
+}
+
+void PacketAckTracker::onTimeout() {
+    if (!acked_ && has_prev_ && g_bleService != nullptr) {
+        g_bleService->queueAck(last_id_);
+        acked_ = true;
+    }
 }

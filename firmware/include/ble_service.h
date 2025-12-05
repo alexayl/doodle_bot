@@ -90,3 +90,23 @@ private:
     static void notif_enabled(bool enabled, void *ctx);
     static void received(struct bt_conn *conn, const void *data, uint16_t len, void *ctx);
 };
+
+
+/**
+ * @brief Tracks packet IDs and queues ACKs when packets complete.
+ */
+class PacketAckTracker {
+public:
+    PacketAckTracker() : last_id_(0), has_prev_(false), acked_(true) {}
+
+    /** Called when command arrives. ACKs previous packet if ID changed. */
+    void onCommand(uint8_t packet_id);
+
+    /** Called on timeout. Flushes last packet ACK if pending. */
+    void onTimeout();
+
+private:
+    uint8_t last_id_;
+    bool has_prev_;
+    bool acked_;
+};
