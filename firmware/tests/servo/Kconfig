@@ -1,0 +1,13 @@
+menu "Zephyr"
+source "Kconfig.zephyr"
+endmenu
+
+# Include driver configurations using APPLICATION_SOURCE_DIR
+source "$(APPLICATION_SOURCE_DIR)/../../drivers/Kconfig"
+
+config SERVO_TEST
+	bool "Build servo test"
+	default y
+	select SERVO
+	help
+	  Servo test application.

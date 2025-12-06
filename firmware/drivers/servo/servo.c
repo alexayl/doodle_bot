@@ -14,8 +14,8 @@
 
 LOG_MODULE_REGISTER(servo, CONFIG_SERVO_LOG_LEVEL);
 
-#define SERVO_MIN_PULSE 1000U
-#define SERVO_MAX_PULSE 2000U
+#define SERVO_MIN_PULSE 500U   /* 0.5ms for 0° */
+#define SERVO_MAX_PULSE 2500U  /* 2.5ms for 180° */
 
 struct servo_config {
     struct pwm_dt_spec pwm;

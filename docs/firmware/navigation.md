@@ -1,0 +1,1 @@
+Gcode -> interpolate (queue of nav commands) -> discretization (turn nav into velocities)

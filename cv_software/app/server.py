@@ -5,13 +5,17 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import List, Tuple, Optional
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 import cv2
-import numpy as np
 from flask import Flask, Response, request, render_template, redirect, url_for
 from werkzeug.utils import secure_filename
 import faulthandler
 
 from app.cv_core import CVPipeline
+from app.cv_core import BOARD_MARGIN_MM as CV_BOARD_MARGIN_MM, BOARD_MARGIN_FRAC as CV_BOARD_MARGIN_FRAC
 from app.control import PathRun, Waypoint
 from app.camera import ThreadedCamera, CameraConfig
 from app.path_parse import load_gcode_file
@@ -27,9 +31,14 @@ PATHFINDING_DIR = os.getenv(
     "PATHFINDING_DIR",
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "pathfinding")),
 )
+STREAM_JPEG_QUALITY = 75
 
-_K_GAIN = float(os.getenv("CV_K_GAIN", "0.5"))
-_MAX_CORR_MM = float(os.getenv("CV_MAX_CORR_MM", "5"))
+
+# Pathfinding canvas size used by path2gcode.py (pixels/abstract units)
+PATH_CANVAS_SIZE = (
+    float(os.getenv("PATH_CANVAS_WIDTH", "1140")),
+    float(os.getenv("PATH_CANVAS_HEIGHT", "1460")),
+)
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 os.makedirs("uploads", exist_ok=True)
@@ -55,8 +64,13 @@ def get_cam() -> Optional[ThreadedCamera]:
 # -----------------------------------------------------------------------------#
 cvp = CVPipeline(cam=None)
 RUN = PathRun()
-bt = BTLink(port=os.getenv("BT_PORT", "/dev/ttyUSB0"), baud=int(os.getenv("BT_BAUD", "115200")))
+bt = BTLink()  # Simplified - uses DEVICE_NAME from environment or default "DOO"
 
+# Default orientation derived from board marker layout:
+# - board X increases to the right (matches firmware)
+# - board Y increases toward the physical top marker, while firmware Y increases downward.
+# Axis signs auto-adjust in-flight if CV sees the robot responding opposite of the command.
+AXIS_SIGN = {"X": 1, "Y": -1}
 @contextmanager
 def _in_dir(path: str):
     old = os.getcwd()
@@ -79,11 +93,159 @@ def _as_waypoints(seq) -> List[Waypoint]:
     return out
 
 # -----------------------------------------------------------------------------#
+# Board delta → firmware steps (auto sign adjustment)
+# -----------------------------------------------------------------------------#
+
+def _map_board_to_robot_steps(bx: float, by: float, min_step: int = 1) -> Optional[Tuple[int, int]]:
+    """Convert a small board delta (mm) into firmware step commands.
+
+    Board coordinates:
+      +X to the right
+      +Y toward the physical top marker
+
+    Firmware coordinates:
+      +X to the right
+      +Y downward
+
+    AXIS_SIGN tracks any motor reversals relative to this convention.
+    """
+    pose = cvp.get_pose_mm()
+    bounds = cvp.get_board_bounds_mm()
+
+    if pose and bounds:
+        (cx, cy), _, _ = pose
+        min_x, min_y, max_x, max_y = bounds
+        final_x = cx + bx
+        final_y = cy + by
+
+        if final_x < min_x or final_x > max_x or final_y < min_y or final_y > max_y:
+            print(
+                f"AXIS SAFETY: Rejected move by ({bx:.1f},{by:.1f})mm "
+                f"from ({cx:.1f},{cy:.1f}) to ({final_x:.1f},{final_y:.1f}) "
+                f"outside bounds [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]"
+            )
+            return None
+    else:
+        print("AXIS WARNING: No pose or bounds available in _map_board_to_robot_steps")
+
+    def _quantize(val: float) -> int:
+        if abs(val) < 1e-3:
+            return 0
+        mag = max(min_step, int(round(abs(val))))
+        return mag if val >= 0 else -mag
+
+    cmd_x = AXIS_SIGN["X"] * float(bx)
+    cmd_y = AXIS_SIGN["Y"] * float(by)
+    sx = _quantize(cmd_x)
+    sy = _quantize(cmd_y)
+
+    print(
+        f"STEP MAP: board_delta=({bx:.1f},{by:.1f}) "
+        f"axis_sign=(X{AXIS_SIGN['X']:+d},Y{AXIS_SIGN['Y']:+d}) "
+        f"cmd=(X{cmd_x:.1f},Y{cmd_y:.1f}) steps=(X{sx},Y{sy})"
+    )
+
+    if sx == 0 and sy == 0:
+        return None
+    return sx, sy
+
+
+
+def _refresh_pose_from_cam(cam: Optional[ThreadedCamera]) -> Optional[tuple]:
+    """Single CV update from the camera feed, returning the latest pose."""
+    if cam is not None:
+        frame = cam.get_latest_good()
+        if frame is not None:
+            try:
+                cvp.update_bot(frame)
+            except Exception:
+                pass
+    return cvp.get_pose_mm()
+
+
+def _wait_for_pose(timeout_s: float) -> Optional[tuple]:
+    """Wait until a pose is detected or timeout expires."""
+    deadline = time.time() + max(0.2, timeout_s)
+    cam = get_cam()
+    while time.time() < deadline:
+        pose = _refresh_pose_from_cam(cam)
+        if pose:
+            return pose
+        time.sleep(0.05)
+    return None
+def _detect_axis_signs(move_mm: float = 12.0, timeout_s: float = 3.0):
+    """
+    Detect firmware axis direction for +X and +Y.
+    Performs small test moves, confirms physical movement via CV,
+    and sets AXIS_SIGN based on real movement.
+    """
+
+    print("AXIS DETECT: Starting axis detection")
+
+    pose = _wait_for_pose(5.0)
+    if not pose:
+        print("AXIS DETECT FAIL: No pose available.")
+        return False
+
+    (x0, y0), _, _ = pose
+
+    # ------------------ Detect X sign ------------------
+    print("AXIS DETECT: probing +X ...")
+    bt.send_gcode_windowed(f"G1 X{int(move_mm)} Y0\n", 1)
+    p2 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
+
+    if not p2:
+        print("AXIS DETECT WARNING: No movement detected on +X probe. Assuming +X is forward.")
+        AXIS_SIGN["X"] = +1
+    else:
+        (x1, y1), _, _ = p2
+        if x1 > x0:
+            AXIS_SIGN["X"] = +1
+            print("AXIS DETECT: +X increases X → AXIS_SIGN[X] = +1")
+        else:
+            AXIS_SIGN["X"] = -1
+            print("AXIS DETECT: +X decreases X → AXIS_SIGN[X] = -1")
+
+    # Move back to original X
+    bt.send_gcode_windowed(f"G1 X{-AXIS_SIGN['X'] * int(move_mm)} Y0\n", 1)
+    _wait_for_pose_change((x1 if p2 else x0, y1 if p2 else y0), min_mm=1.0, timeout_s=timeout_s)
+
+    # ------------------ Detect Y sign ------------------
+    pose = _wait_for_pose(2.0)
+    if not pose:
+        print("AXIS DETECT FAIL: Lost pose before Y probe.")
+        return False
+    (x0, y0), _, _ = pose
+
+    print("AXIS DETECT: probing +Y ...")
+    bt.send_gcode_windowed(f"G1 X0 Y{int(move_mm)}\n", 1)
+    p3 = _wait_for_pose_change((x0, y0), min_mm=2.0, timeout_s=timeout_s)
+
+    if not p3:
+        print("AXIS DETECT WARNING: No movement detected on +Y probe. Assuming +Y is forward.")
+        AXIS_SIGN["Y"] = +1
+    else:
+        (x2, y2), _, _ = p3
+        if y2 > y0:
+            AXIS_SIGN["Y"] = +1
+            print("AXIS DETECT: +Y increases Y → AXIS_SIGN[Y] = +1")
+        else:
+            AXIS_SIGN["Y"] = -1
+            print("AXIS DETECT: +Y decreases Y → AXIS_SIGN[Y] = -1")
+
+    # Move back to original Y
+    bt.send_gcode_windowed(f"G1 X0 Y{-AXIS_SIGN['Y'] * int(move_mm)}\n", 1)
+    _wait_for_pose_change((x2 if p3 else x0, y2 if p3 else y0), min_mm=1.0, timeout_s=timeout_s)
+
+    print(f"AXIS DETECT COMPLETE: AXIS_SIGN = {AXIS_SIGN}")
+    return True
+
+# -----------------------------------------------------------------------------#
 # G-code helpers
 # -----------------------------------------------------------------------------#
 def _ops_to_normalized_wps(ops: List[tuple]) -> List[Waypoint]:
     """
-    Convert ("move", dx,dy, dz) incremental ops to [0..1] normalized waypoints.
+    Convert ("move", dx, dy) incremental ops to [0..1] normalized waypoints.
     """
     x = y = 0.0
     pts: List[tuple[float, float]] = []
@@ -125,7 +287,167 @@ def _load_named_gcode_normalized(name: str) -> List[Waypoint]:
         return []
     return _ops_to_normalized_wps(ops)
 
-def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(575, 730)) -> str:
+def _home_bot(
+    inset_mm: float = 20.0,
+    step_coarse: float = 35.0,
+    step_fine: float = 12.0,
+    arrival_mm: float = 15.0,
+    timeout_s: float = 45.0,
+) -> bool:
+    """
+    bounded homing toward top-left corner.
+    Uses board-frame deltas only.
+    NO probes, NO heading, NO sign guessing.
+    All moves are safety-checked through _map_board_to_robot_steps().
+    """
+
+    st = cvp.get_state()
+    if not st["calibrated"]:
+        print("HOME FAIL: Board not calibrated")
+        return False
+
+    min_x, min_y, max_x, max_y = cvp.get_board_bounds_mm()
+    tx = min_x + inset_mm
+    ty = max_y - inset_mm
+    print(f"HOME: TL target = ({tx:.1f},{ty:.1f})mm")
+
+    pose = cvp.get_pose_mm()
+    if not pose:
+        pose = _wait_for_pose(10)
+    if not pose:
+        print("HOME FAIL: No initial pose")
+        return False
+    if not _detect_axis_signs():
+        print("HOME FAIL: Could not detect axis directions.")
+        return False
+    (cx, cy), _, _ = pose
+    print(f"HOME: Start pose=({cx:.1f},{cy:.1f})")
+
+    # ---- MAIN LOOP ----
+    t0 = time.time()
+    stuck = 0
+    max_stuck = 4
+
+    while time.time() - t0 < timeout_s:
+
+        pose = cvp.get_pose_mm()
+        if not pose:
+            print("HOME: pose lost, waiting…")
+            time.sleep(0.05)
+            continue
+
+        (cx, cy), _, _ = pose
+
+        dx = tx - cx
+        dy = ty - cy
+        dist = math.hypot(dx, dy)
+        print(f"HOME: pos=({cx:.1f},{cy:.1f}) dist={dist:.1f}")
+
+        if dist < arrival_mm:
+            print("HOME ✓ reached TL target")
+            return True
+
+        step = step_coarse if dist > 120 else step_fine
+        step = max(6, min(step, dist * 0.45))
+
+        norm = math.hypot(dx, dy)
+        ux = dx / norm
+        uy = dy / norm
+
+        bx = ux * step
+        by = uy * step
+
+        steps = _map_board_to_robot_steps(bx, by)
+        if steps is None:
+            print("HOME: Step rejected by safety map (would exit board). Stopping.")
+            return True
+
+        sx, sy = steps
+        cmd = f"G1 X{sx} Y{sy}\n"
+        print(f"HOME → {cmd.strip()}")
+        bt.send_gcode_windowed(cmd, 1)
+
+        before = (cx, cy)
+        p2 = _wait_for_pose_change(before, 1.5, 3.5)
+        if not p2:
+            stuck += 1
+            print(f"HOME WARN: stuck {stuck}/{max_stuck}")
+            if stuck >= max_stuck:
+                print("HOME FAIL: robot not moving")
+                return False
+        else:
+            print("HOME: movement confirmed")
+            stuck = 0
+
+    print("HOME FAIL: timeout")
+    return False
+
+def _send_with_cv_correction(firmware_gcode: str, fitted_wps: List[Waypoint], window_size: int = 5):
+    """Send G-code with real-time CV correction using centralized PathCorrectionEngine."""
+    cvp.correction.reset()
+
+    def correction_callback(head_pid: int, head_line: str, next_line: Optional[str]) -> List[str]:
+        if not RUN.active:
+            return []
+
+        current_idx = RUN.follower.index()
+        next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
+
+        correction = cvp.correction.compute_correction(
+            waypoints=fitted_wps,
+            current_index=current_idx,
+            next_is_g1=next_is_g1,
+        )
+        if correction is None:
+            return []
+
+        sx, sy = correction
+        return [f"G1 X{sx} Y{sy}"]
+
+    def on_head_executed(head_pid: int, head_line: str, ack_msg: str):
+        pose = cvp.get_pose_mm()
+        if not pose or not RUN.active:
+            return
+
+        try:
+            reached, dev_mm = RUN.follower.update_and_check_reached(pose)
+        except Exception as e:
+            print(f"[FOLLOWER] update error: {e}")
+            return
+
+        if dev_mm is not None:
+            dev_mm = float(dev_mm)
+            cvp.correction.log_deviation(dev_mm)
+            if cvp.correction.correction_count % 10 == 0:
+                rms = cvp.correction.rms_deviation()
+                print(f"[DEVIATION] inst={dev_mm:.2f}mm RMS={rms:.2f}mm")
+
+        if reached:
+            print(f"WAYPOINT_REACHED: {RUN.follower.index()}/{RUN.follower.total()}")
+
+    bt.send_gcode_windowed(
+        firmware_gcode,
+        window_size=window_size,
+        correction_cb=correction_callback,
+        on_head_executed=on_head_executed,
+    )
+def _assert_fitted_in_bounds(fitted):
+    bounds = cvp.get_board_bounds_mm()
+    if not bounds:
+        raise RuntimeError("Board bounds not available")
+    min_x, min_y, max_x, max_y = bounds
+
+    for i, wp in enumerate(fitted):
+        x = wp.x_mm
+        y = wp.y_mm
+        if not (min_x <= x <= max_x and min_y <= y <= max_y):
+            raise RuntimeError(
+                f"Waypoint {i} out of bounds: ({x:.1f},{y:.1f}) "
+                f"safe=({min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f})"
+            )
+
+
+def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800, 400)) -> str:
     """Run the pathfinding stack and write G-code next to the uploaded image."""
     if PATHFINDING_DIR not in sys.path:
         sys.path.insert(0, PATHFINDING_DIR)
@@ -159,13 +481,24 @@ def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(575
 
     return out_gcode_path
 
+def _read_gcode_text(path_or_name: str) -> str:
+    """Return G-code file contents as a UTF-8 string."""
+    if os.path.isfile(path_or_name):
+        p = path_or_name
+    else:
+        p = os.path.join(PATHFINDING_DIR, f"{path_or_name}.gcode")
+        if not os.path.isfile(p):
+            p = os.path.join(PATHFINDING_DIR, "gcode", f"{path_or_name}.gcode")
+    if not os.path.isfile(p):
+        raise FileNotFoundError(f"G-code not found: {path_or_name}")
+    with open(p, "r", encoding="utf-8") as f:
+        return f.read()
+
 # -----------------------------------------------------------------------------#
-# CV worker; Bluetooth sending of (dx,dy,dz) packets)
+# CV worker (kept for metrics/overlay).
 # -----------------------------------------------------------------------------#
 _cv_thread: Optional[threading.Thread] = None
 
-def _clamp(v: float, m: float) -> float:
-    return -m if v < -m else (m if v > m else v)
 def _process_frame_once(frame) -> tuple[bool, float]:
     t0 = time.perf_counter()
     try:
@@ -173,7 +506,7 @@ def _process_frame_once(frame) -> tuple[bool, float]:
     except Exception:
         try:
             st = cvp.get_state()
-            if (not st["calibrated"]) or (st["mm_per_px"] is None) or ((time.monotonic() % 2.0) < 0.05):
+            if (not st["calibrated"]) or ((time.monotonic() % 2.0) < 0.05):
                 cvp.calibrate_board(frame)
             cvp.update_bot(frame)
             st2 = cvp.get_state()
@@ -182,6 +515,30 @@ def _process_frame_once(frame) -> tuple[bool, float]:
             valid = False
     return bool(valid), (time.perf_counter() - t0)
 
+def _wait_for_pose_change(prev_xy: Optional[tuple[float, float]], min_mm: float = 2.0, timeout_s: float = 2.0) -> Optional[tuple[tuple[float,float], float, float]]:
+    """Block until CV reports a sufficiently changed pose or timeout.
+    Returns the latest pose tuple on success, or None on timeout.
+    """
+    t_end = time.time() + max(0.2, float(timeout_s))
+    cam = get_cam()
+    last = prev_xy
+    while time.time() < t_end:
+        if cam is not None:
+            frame = cam.get_latest_good()
+            if frame is not None:
+                try:
+                    _process_frame_once(frame)
+                except Exception:
+                    pass
+        pose = cvp.get_pose_mm()
+        if pose and last:
+            (cx, cy), _, _ = pose
+            if math.hypot(cx - last[0], cy - last[1]) >= float(min_mm):
+                return pose
+        elif pose:
+            return pose
+        time.sleep(0.04)
+    return None
 
 def _cv_worker():
     try:
@@ -190,14 +547,14 @@ def _cv_worker():
         pass
 
     cam = get_cam()
-    batch_vertices = 12
-    idle_timeout_s = 1.0
-
-    # pen state we mirror to firmware via dz flags
-    pen_is_down = False
-    sent_initial_pen = False
 
     while True:
+        # if not bt.client or not bt.client.is_connected:
+        # try:
+        #     bt.connect()
+        # except Exception:
+        #     time.sleep(1.0)
+        #     continue
         if cam is None:
             time.sleep(0.02)
             cam = get_cam()
@@ -205,62 +562,35 @@ def _cv_worker():
 
         frame = cam.get_latest_good()
         if frame is None:
-            time.sleep(0.004)
+            time.sleep(0.0004)
             continue
 
         valid, tproc = _process_frame_once(frame)
         MET.note(valid, tproc)
+        # --- METRIC PRINTS -----------------------------------------------------
+        if MET.count % 676767 == 0:
+            median_lat_ms = MET.median_latency_ms()
+            hz = MET.rate_hz()
+            uptime = MET.uptime_pct
 
-        if RUN.active:
-            bt.wait_idle(idle_timeout_s)
+            st = cvp.get_state()
+            conf = st.get("board_confidence", None)
+            calibrated = st["calibrated"]
+            if conf == 0:
+                calibrated = False
+            print(
+                f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
+                f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
+                f"board conf={conf if conf is not None else 'NA'}, calibrated={calibrated}"
+            )
 
-            pose = cvp.get_pose_mm()
-            verts: List[Tuple[float, float, int]] = []  # (dx,dy,dz)
-            for _ in range(batch_vertices):
-                step = RUN.follower.step(pose)  # (fwd, left) in ROBOT frame
-                if step is None:
-                    if pen_is_down:
-                        verts.append((0.0, 0.0, +1))
-                        pen_is_down = False
-                    RUN.stop()
-                    sent_initial_pen = False
-                    break
-
-                # CV correction in BOARD mm, rotate ROBOT
-                st = cvp.get_state()
-                ok_conf = (
-                    st["calibrated"]
-                    and (st["board_confidence"] is None or st["board_confidence"] >= 0.60)
-                    and st["bot_pose"] is not None
-                    and st["bot_pose"]["confidence"] >= 0.60
-                )
-                if ok_conf and pose is not None:
-                    err = RUN.follower.current_error(pose)
-                    if err is not None:
-                        ex, ey, _tgt = err
-                        cx = _clamp(_K_GAIN * ex, _MAX_CORR_MM)
-                        cy = _clamp(_K_GAIN * ey, _MAX_CORR_MM)
-                        corr = cvp.corrected_delta_for_bt((cx, cy), rotate_into_bot_frame=True)
-                        if corr is not None:
-                            step = (step[0] + float(corr[0]), step[1] + float(corr[1]))
-
-                dz = 0
-                if not sent_initial_pen:
-                    verts.append((0.0, 0.0, -1))
-                    pen_is_down = True
-                    sent_initial_pen = True
-
-                verts.append((float(step[0]), float(step[1]), dz))
-
-                # refresh pose for next iteration
-                pose = cvp.get_pose_mm()
-
-            if verts:
+            # Auto-recalibration check
+            if conf is not None and conf < 0.6:
+                print("[METRICS] WARNING: marker confidence < 0.6 → reinitializing calibration")
                 try:
-                    bt.send_moves_with_dz(verts)
+                    cvp.calibrate_board(frame)
                 except Exception:
-                    pass
-
+                    print("[METRICS] ERROR: failed to reset calibration")
         time.sleep(0.004)
 
 def _ensure_cv_thread():
@@ -269,13 +599,16 @@ def _ensure_cv_thread():
         _cv_thread = threading.Thread(target=_cv_worker, daemon=True)
         _cv_thread.start()
 
+# -----------------------------------------------------------------------------#
+# Overlay/Stream
+# -----------------------------------------------------------------------------#
 def overlay_fn():
     def _draw(frame):
         st = cvp.get_state()
         line1 = f"Mode: {STATE['mode'].upper()}"
         if st["calibrated"]:
             try:
-                line1 += f" | mm/px: {st['mm_per_px']:.3f} | reproj: {st['board_reproj_err_px']:.2f}"
+                line1 += f" | reproj: {st['board_reproj_err_px']:.2f}"
             except Exception:
                 pass
         else:
@@ -338,8 +671,6 @@ def erase():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("erase"))
 
         raw_norm = _load_named_gcode_normalized("erase")
@@ -347,12 +678,28 @@ def erase():
             error = "No erase path found in pathfinding directory."
         else:
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
+            _assert_fitted_in_bounds(fitted)
             if not fitted:
                 error = "Board not calibrated yet."
             else:
+                # Home the bot to starting position first
+                # if not _home_bot():
+                #     error = "Failed to home bot to starting position"
+                # else:
+                try:
+                    gcode_str = _read_gcode_text("erase")
+                
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)
+                    
+                    # Send with CV correction enabled
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
+
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
-                msg = f"Erase queued with {len(fitted)} vertices."
+                msg = f"Erase queued with {len(fitted)} vertices and sent over BLE with CV correction."
+
         return render_template("index.html", page="erase", msg=msg, error=error)
 
     return render_template("index.html", page="erase", msg=msg, error=error)
@@ -367,12 +714,11 @@ def draw():
         action = request.form.get("action", "start")
         if action == "stop":
             RUN.stop()
-            try: bt.stop()
-            except: pass
             return redirect(url_for("draw"))
 
         uploaded_file = request.files.get("file")
         raw_norm: List[Waypoint] = []
+        gcode_path: Optional[str] = None
 
         if uploaded_file and uploaded_file.filename:
             fname = secure_filename(uploaded_file.filename)
@@ -381,8 +727,8 @@ def draw():
             STATE["target_image"] = fname
             try:
                 base = os.path.splitext(fname)[0]
-                out_gcode = os.path.join("uploads", f"{base}.gcode")
-                gcode_path = _convert_image_to_gcode(img_path, out_gcode, canvas_size=(575, 730))
+                gcode_path = os.path.join("uploads", f"{base}.gcode")
+                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(800, 400))
                 ops = load_gcode_file(gcode_path)
                 raw_norm = _ops_to_normalized_wps(ops)
             except Exception as e:
@@ -396,15 +742,29 @@ def draw():
             raw_norm = fallback
 
         if raw_norm:
-            if cvp.cal.board_pose and cvp.cal.board_pose.mm_per_px is None:
-                cvp.scale.from_board_size()
             fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
+            _assert_fitted_in_bounds(fitted)
             if not fitted:
                 error = "Board not calibrated yet (no homography or scale)."
             else:
+                # if not _home_bot():
+                #     error = "Failed to home bot to starting position"
+                # else:
+                #     # Send raw G-code to MCU (use generated file if present, else named fallback)
+                try:
+                    src_for_gcode = gcode_path if gcode_path else "draw"
+                    gcode_str = _read_gcode_text(src_for_gcode)
+                    print(f"Sending G-code from {src_for_gcode}...")
+                
+                    firmware_gcode = cvp.build_firmware_gcode(gcode_str)     
+                    print(f"Built firmware G-code with {len(firmware_gcode.splitlines())} lines.")              
+                    _send_with_cv_correction(firmware_gcode, fitted, window_size=5)
+                except Exception as e:
+                    error = f"Failed to send G-code: {e}"
+
                 RUN.load(_as_waypoints(fitted))
                 RUN.start()
-                msg = f"Draw queued with {len(fitted)} vertices."
+                msg = f"Draw queued with {len(fitted)} vertices and sent over BLE with CV correction."
 
         return render_template("index.html", page="draw",
                                has_target=bool(STATE["target_image"]),
@@ -423,11 +783,82 @@ def stream():
     return Response(gen_frames(overlay_fn, quality=q),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
 
+@app.route("/home", methods=["POST"]) 
+def home_robot():
+    print("HOME: Requested homing sequence")
+    _ensure_cv_thread()
+    print("HOME: Ensuring board is calibrated...")
+    timeout = 20.0
+    start_time = time.time()
+    last_log_time = 0.0
+    
+    while time.time() - start_time < timeout:
+        state = cvp.get_state()
+        
+        # Log progress every 2 seconds
+        if time.time() - last_log_time > 2.0:
+            if not state["calibrated"]:
+                print(f"HOME: Waiting for board calibration... ({time.time() - start_time:.1f}s elapsed)")
+            last_log_time = time.time()
+        
+        if state["calibrated"]:
+            print(f"HOME: Ready! Calibration and scale complete after {time.time() - start_time:.1f}s")
+            break
+        time.sleep(0.2)
+    
+    state = cvp.get_state()
+    if not state["calibrated"]:
+        return {"success": False, "error": "Board not calibrated after 20s timeout"}, 400
+    
+    ok = _home_bot()
+    if ok:
+        return {"success": True}, 200
+    return {"success": False, "error": "homing failed"}, 500
+
+@app.route("/test_send", methods=["POST"])
+def test_send():
+    """Send G-code directly without pathfinding pipeline (for testing)"""
+    _ensure_cv_thread()
+    try:
+        gcode_file = request.form.get("gcode_file", "uploads/test_simple_square.gcode")
+        
+        if not os.path.isfile(gcode_file):
+            return {"error": f"File not found: {gcode_file}"}, 404
+        
+        with open(gcode_file, 'r') as f:
+            gcode_str = f.read()
+        
+        if not cvp.get_state()["calibrated"]:
+            return {"error": "Board not calibrated - wait for calibration to lock"}, 400
+        
+        board_size = cvp.board_size_mm()
+        if not board_size:
+            return {"error": "No board scale available - robot markers not detected"}, 400
+        
+        bounds = cvp.get_board_bounds_mm()
+        if bounds:
+            min_x, min_y, max_x, max_y = bounds
+            margin = max(CV_BOARD_MARGIN_MM, CV_BOARD_MARGIN_FRAC * min(max_x - min_x, max_y - min_y))
+            print(f"TEST_SEND: Board {board_size[0]:.1f}mm × {board_size[1]:.1f}mm, margins={margin:.1f}mm")
+            print(f"TEST_SEND: Safe zone ({min_x+margin:.1f},{min_y+margin:.1f}) to ({max_x-margin:.1f},{max_y-margin:.1f})")
+        
+        normalized = gcode_str
+        
+        print(f"Sending test G-code from {gcode_file}:")
+        for i, line in enumerate(normalized.split('\n')[:10]):
+            if line.strip():
+                print(f"  {i}: {line}")
+        
+        bt.send_gcode_windowed(normalized, window_size=1)
+        
+        return {"success": True, "lines_sent": len([l for l in normalized.split('\n') if l.strip()])}
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 def _shutdown():
     try:
         RUN.stop()
-        bt.stop()
+        bt.close()
     except Exception:
         pass
     cam = get_cam()

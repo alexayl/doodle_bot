@@ -30,20 +30,12 @@ typedef enum {
 int simple_led_init(void);
 
 /**
- * LED Driver Function - receives ON/OFF commands from core firmware
+ * LED Driver Function - receives 1/0 commands from core firmware
  * Compatible with led_control test expectations
- * @param command LED_ON or LED_OFF
+ * @param state 1 for ON, 0 for OFF
  * @return 0 on success, negative error code on failure
  */
-int led_driver_set(led_command_t command);
-
-/**
- * LED Driver Function - receives ON/OFF commands from core firmware
- * Compatible with led_control test expectations
- * @param command LED_ON or LED_OFF
- * @return 0 on success, negative error code on failure
- */
-int led_driver_set(led_command_t command);
+int led_driver_set(int state);
 
 /**
  * Turn LED on

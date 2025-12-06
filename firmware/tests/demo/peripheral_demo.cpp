@@ -5,7 +5,7 @@
  * - Servos: Move back and forth
  * - Buzzer: Toggle on/off (using PWM buzzer toggle)
  * - LED: Toggle on/off (GPIO11)
- * - Stepper: 360° forward and backward
+ * - Stepper: 90° forward and backward
  */
 
 #include <zephyr/kernel.h>
@@ -15,10 +15,12 @@
 #include <stdlib.h> // For abs() function
 
 // Include all your drivers
+extern "C" {
 #include "stepper.h"
 #include "pwm_buzzer.h"
 #include "servo.h"
 #include "simple_led.h"
+}
 
 /* Servo devices from device tree */
 static const struct device *servo_eraser;
@@ -364,7 +366,7 @@ static void test_stepper(void)
     
     stepper_start_counting(360.0f);
     stepper_set_velocity(STEPPER_LEFT, 360.0f);  // 1 rev/s
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(1000));  // Run for 1.2 seconds to ensure full rotation
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     
@@ -383,7 +385,7 @@ static void test_stepper(void)
     printk("\nTest 2: 360° Backward (counter-clockwise)\n");
     stepper_start_counting(360.0f);
     stepper_set_velocity(STEPPER_LEFT, -360.0f);  // 1 rev/s reverse
-    k_sleep(K_MSEC(1200));  // Run for 1.2 seconds to ensure full rotation
+    k_sleep(K_MSEC(1000));  // Run for 1.2 seconds to ensure full rotation
     stepper_stop(STEPPER_LEFT);
     stepper_stop_counting();
     

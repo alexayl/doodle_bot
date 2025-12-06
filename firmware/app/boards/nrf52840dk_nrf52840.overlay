@@ -1,15 +1,17 @@
 / {
     /* Servo motor for eraser control - P0.13 PWM */
     servo_eraser: servo_eraser {
-        compatible = "doodle-servo";
+        status = "okay";
+        compatible = "doodle_servo";
         pwms = <&pwm0 0 20000000 0>; /* 20ms period, normal polarity - P0.13 */
         label = "SERVO_ERASER";
     };
 
-    /* Servo motor for marker control - P0.03 PWM */
+    /* Servo motor for marker control - P0.28 PWM */
     servo_marker: servo_marker {
-        compatible = "doodle-servo";
-        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.03 */
+        status = "okay";
+        compatible = "doodle_servo";
+        pwms = <&pwm0 1 20000000 0>; /* 20ms period, normal polarity - P0.28 */
         label = "SERVO_MARKER";
     };
 
@@ -18,7 +20,7 @@
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        step-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;      /* P0.02 - Step pulses */
+        pwms = <&pwm0 2 20000 0>;                      /* PWM for step pulses - P0.02 */
         dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;       /* P0.03 - Direction control */
         en-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;         /* P0.04 - Enable/disable */
         label = "LEFT_STEPPER";
@@ -29,7 +31,7 @@
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* P0.05 - Step pulses */
+        pwms = <&pwm1 0 20000 0>;                      /* PWM for step pulses - P0.05 */
         dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* P0.06 - Direction control */
         en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* P0.07 - Enable/disable */
         label = "RIGHT_STEPPER";
@@ -51,13 +53,53 @@
         label = "BUZZER";
     };
 
+    /* PWM Buzzer with volume control - separate from GPIO buzzer */
+    pwm_buzzer: pwm_buzzer {
+        compatible = "pwm-buzzer";
+        pwms = <&pwm0 3 2500000 0>; /* P0.15 - 400Hz, Channel 3, normal polarity */
+        label = "PWM_BUZZER";
+    };
+
+    /* Latency measurement feedback pins - jumper wire connections */
+    latency_feedback {
+        compatible = "gpio-keys";
+        
+        led_feedback: led_feedback {
+            gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;  /* P0.08 - LED feedback */
+            label = "LED_FEEDBACK";
+        };
+        
+        buzzer_feedback: buzzer_feedback {
+            gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;  /* P0.09 - Buzzer feedback */
+            label = "BUZZER_FEEDBACK";
+        };
+        
+        servo_eraser_feedback: servo_eraser_feedback {
+            gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;  /* P0.10 - Servo eraser feedback */
+            label = "SERVO_ERASER_FEEDBACK";
+        };
+        
+        servo_marker_feedback: servo_marker_feedback {
+            gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>;  /* P0.11 - Servo marker feedback */
+            label = "SERVO_MARKER_FEEDBACK";
+        };
+    };
+
     aliases {
         stepper-left = &stepper_left;
         stepper-right = &stepper_right;
         servo-eraser = &servo_eraser;
         servo-marker = &servo_marker;
+        servoe = &servo_eraser;  /* servo eraser */
+        servom = &servo_marker;  /* servo marker */
         led0 = &led1;
         buzzer0 = &buzzer;
+        pwm-buzzer0 = &pwm_buzzer;
+        /* Latency measurement aliases */
+        led-feedback = &led_feedback;
+        buzzer-feedback = &buzzer_feedback;
+        servo-eraser-feedback = &servo_eraser_feedback;
+        servo-marker-feedback = &servo_marker_feedback;
     };
 };
 
@@ -69,18 +111,43 @@
     #pwm-cells = <3>;
 };
 
+&pwm1 {
+    status = "okay";
+    pinctrl-0 = <&pwm1_default>;
+    pinctrl-1 = <&pwm1_sleep>;
+    pinctrl-names = "default", "sleep";
+    #pwm-cells = <3>;
+};
+
 &pinctrl {
     pwm0_default: pwm0_default {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 3)>;   /* P0.03 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 28)>,  /* P0.28 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT2, 0, 2)>,   /* P0.02 - Stepper PWM */
+                    <NRF_PSEL(PWM_OUT3, 0, 15)>;  /* P0.15 - Buzzer PWM */
         };
     };
 
     pwm0_sleep: pwm0_sleep {
         group1 {
             psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,  /* P0.13 - Servo Eraser PWM */
-                    <NRF_PSEL(PWM_OUT1, 0, 3)>;   /* P0.03 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT1, 0, 28)>,  /* P0.28 - Servo Marker PWM */
+                    <NRF_PSEL(PWM_OUT2, 0, 2)>,   /* P0.02 - Stepper PWM */
+                    <NRF_PSEL(PWM_OUT3, 0, 15)>;  /* P0.15 - Buzzer PWM */
+            low-power-enable;
+        };
+    };
+
+    pwm1_default: pwm1_default {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;   /* P0.05 - Right Stepper PWM */
+        };
+    };
+
+    pwm1_sleep: pwm1_sleep {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;   /* P0.05 - Right Stepper PWM */
             low-power-enable;
         };
     };

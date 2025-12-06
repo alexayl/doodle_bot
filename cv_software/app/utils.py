@@ -27,12 +27,30 @@ def encode_jpeg(frame: np.ndarray, quality: int = 65) -> bytes | None:
             pass
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return buf.tobytes() if ok else None
-def board_to_robot(dx_board: float, dy_board: float, heading_rad: float) -> Tuple[float, float]:
+
+def board_to_robot(dx_board: float, dy_board: float, heading_rad: float) -> tuple[float, float]:
+    """Rotate a board-frame delta (dx, dy) into robot forward/left components.
+
+    Board coordinate frame (post-homography):
+    - Origin: bottom-left of physical board (after Y inversion in homography)
+    - +X: rightward
+    - +Y: upward (toward physical top). This is the inverse of the pathfinding canvas
+        where Y increases downward; the homography mapping flipped Y so that math/firmware
+        use a conventional Cartesian orientation for motion planning.
+
+    Robot frame:
+    - forward: along current heading direction
+    - left: perpendicular to heading (positive to robot's left side)
+
+    Uses negative heading in rotation for an equivalent formulation to
+    cv_core.correct_delta_mm (sign convention differs but result matches).
+    """
     c = math.cos(-heading_rad)
     s = math.sin(-heading_rad)
     fwd = c * dx_board - s * dy_board
     lef = -(s * dx_board + c * dy_board)
     return float(fwd), float(lef)
+
 # ---- Metrics ----
 class Metrics:
     """Class to track and compute metrics related to processing frames."""
@@ -44,6 +62,8 @@ class Metrics:
         self.valid_frames = 0
         self.total_frames = 0
         self.uptime_pct = 0.0
+        self.count = 0
+
 
     def note(self, valid: bool, t_proc_s: float):
         """Record the processing time and update frame counts."""
@@ -54,11 +74,13 @@ class Metrics:
         self.uptime_pct = 100.0 * self.valid_frames / max(1, self.total_frames)
 
     def rate_hz(self) -> float:
-        """Calculate the frame processing rate in Hertz."""
-        ts = list(self.ts_hist)
-        if len(ts) < 3: return 0.0
-        dur = ts[-1] - ts[0]
-        return 0.0 if dur <= 1e-6 else float(len(ts) - 1) / float(dur)
+        """Calculate the frame processing rate in Hertz (robust to tuple/float entries)."""
+        ts_elems = list(self.ts_hist)
+        if len(ts_elems) < 3:
+            return 0.0
+        times = [(e[0] if isinstance(e, tuple) else e) for e in ts_elems] #computes num of frame / duration
+        dur = times[-1] - times[0]
+        return 0.0 if dur <= 1e-6 else float(len(times) - 1) / float(dur)
 
     def median_latency_ms(self) -> float:
         """Compute the median latency in milliseconds."""
