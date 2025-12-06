@@ -93,14 +93,30 @@ def _in_dir(path: str):
         os.chdir(old)
 
 def _as_waypoints(seq) -> List[Waypoint]:
+    """Convert sequence to waypoints with validation."""
     out: List[Waypoint] = []
     if not seq:
         return out
-    for item in seq:
-        if isinstance(item, Waypoint):
-            out.append(item)
-        elif isinstance(item, (tuple, list)) and len(item) >= 2:
-            out.append(Waypoint(x_mm=float(item[0]), y_mm=float(item[1])))
+    import math
+    for i, item in enumerate(seq):
+        try:
+            if isinstance(item, Waypoint):
+                # Validate existing waypoint
+                if math.isfinite(item.x_mm) and math.isfinite(item.y_mm):
+                    out.append(item)
+                else:
+                    print(f"[AS_WAYPOINTS] WARNING: Skipping invalid waypoint {i}: ({item.x_mm}, {item.y_mm})")
+            elif isinstance(item, (tuple, list)) and len(item) >= 2:
+                x = float(item[0])
+                y = float(item[1])
+                if math.isfinite(x) and math.isfinite(y):
+                    out.append(Waypoint(x_mm=x, y_mm=y))
+                else:
+                    print(f"[AS_WAYPOINTS] WARNING: Skipping invalid waypoint {i}: ({x}, {y})")
+            else:
+                print(f"[AS_WAYPOINTS] WARNING: Skipping invalid waypoint item {i}: {type(item)}")
+        except (ValueError, TypeError, IndexError) as e:
+            print(f"[AS_WAYPOINTS] ERROR: Failed to convert waypoint {i}: {e}")
     return out
 
 # -----------------------------------------------------------------------------#
@@ -184,11 +200,61 @@ def _wait_for_pose(timeout_s: float) -> Optional[tuple]:
     """Wait until a pose is detected or timeout expires."""
     deadline = time.time() + max(0.2, timeout_s)
     cam = get_cam()
+    start = time.time()
+    attempts = 0
+    last_report = start
+    
+    if cam is None:
+        print("[POSE WAIT] ERROR: Camera not initialized")
+        return None
+    
+    print(f"[POSE WAIT] Starting pose detection (timeout={timeout_s:.1f}s)")
+    
     while time.time() < deadline:
-        pose = _refresh_pose_from_cam(cam)
-        if pose:
-            return pose
+        attempts += 1
+        elapsed = time.time() - start
+        
+        # Get frame and check quality
+        frame = cam.get_latest_good()
+        if frame is None:
+            if elapsed - (last_report - start) >= 2.0:
+                stats = cam.get_stats()
+                print(f"[POSE WAIT] {elapsed:.1f}s: No frame from camera (attempt {attempts})")
+                print(f"  Camera stats: has_frame={stats.get('has_frame')}, has_good_frame={stats.get('has_good_frame')}, latest_ts={stats.get('latest_ts', 0):.2f}s")
+                last_report = time.time()
+            time.sleep(0.05)
+            continue
+        
+        # Try to update bot pose
+        try:
+            cvp.update_bot(frame)
+            pose = cvp.get_pose_mm()
+            if pose:
+                print(f"[POSE WAIT] SUCCESS: Detected pose at ({pose[0][0]:.1f}, {pose[0][1]:.1f})mm after {elapsed:.1f}s ({attempts} attempts)")
+                return pose
+            else:
+                # Check if board is calibrated
+                state = cvp.get_state()
+                if not state.get("calibrated", False):
+                    if elapsed - (last_report - start) >= 2.0:
+                        print(f"[POSE WAIT] {elapsed:.1f}s: Board not calibrated (attempt {attempts})")
+                        last_report = time.time()
+                elif elapsed - (last_report - start) >= 2.0:
+                    print(f"[POSE WAIT] {elapsed:.1f}s: Board calibrated but bot markers not detected (attempt {attempts})")
+                    last_report = time.time()
+        except Exception as e:
+            if elapsed - (last_report - start) >= 2.0:
+                print(f"[POSE WAIT] {elapsed:.1f}s: CV update error: {e}")
+                last_report = time.time()
+        
         time.sleep(0.05)
+    
+    # Final diagnostics on timeout
+    stats = cam.get_stats()
+    state = cvp.get_state()
+    print(f"[POSE WAIT] TIMEOUT: No pose detected after {timeout_s:.1f}s ({attempts} attempts)")
+    print(f"  Final camera stats: has_frame={stats.get('has_frame')}, has_good_frame={stats.get('has_good_frame')}")
+    print(f"  Board calibrated: {state.get('calibrated', False)}")
     return None
 
 
@@ -418,6 +484,7 @@ def _home_bot(
 def _send_with_cv_correction(
     firmware_gcode: str,
     fitted_wps: List[Waypoint],
+    start_pos: Optional[Tuple[float, float]] = None,
     window_size: int = 1,
 ):
     """Send G-code with optional real-time CV correction.
@@ -433,6 +500,12 @@ def _send_with_cv_correction(
     path_wps = _as_waypoints(fitted_wps)
     if not path_wps:
         raise RuntimeError("No fitted waypoints available for correction run.")
+    
+    # Validate waypoint count
+    if len(path_wps) < 2:
+        raise RuntimeError(f"Insufficient waypoints for path following: {len(path_wps)} (need at least 2)")
+    
+    print(f"[SEND] Validated {len(path_wps)} waypoints for path following")
 
     # Safety tuning: limit per-injection correction magnitude (mm)
     MAX_CORR_MM = CORR_MAX_MM
@@ -449,41 +522,49 @@ def _send_with_cv_correction(
     corrected_pids = set()
 
     bounds = cvp.get_board_bounds_mm()
-    RUN.load(path_wps, bounds=bounds)
-    RUN.start()
+    
+    # Validate waypoints before loading
+    if not path_wps:
+        raise RuntimeError("No waypoints provided for path run")
+    
+    # Load waypoints with error handling
+    if not RUN.load(path_wps, bounds=bounds):
+        raise RuntimeError("Failed to load waypoints into path follower")
+    
+    # Verify waypoint count matches
+    if RUN.follower.total() != len(path_wps):
+        print(f"[SEND] WARNING: Waypoint count mismatch: loaded {RUN.follower.total()}, provided {len(path_wps)}")
+    
+    # Start path following
+    if not RUN.start():
+        raise RuntimeError("Failed to start path follower")
+    
     cvp.correction.reset()
 
     lines = firmware_gcode.splitlines()
     expected_pos_after_pid: List[Optional[Tuple[float, float]]] = [None] * len(lines)
     try:
         import re
-        # Infer anchor from first move
-        first_dx, first_dy = 0.0, 0.0
-        for raw in lines:
-            upper = raw.strip().upper()
-            if upper.startswith("G0") or upper.startswith("G1"):
-                dx_match = re.search(r'\bX\s*([-+]?\d+)', upper)
-                dy_match = re.search(r'\bY\s*([-+]?\d+)', upper)
-                if dx_match:
-                    first_dx = float(dx_match.group(1))
-                if dy_match:
-                    first_dy = float(dy_match.group(1))
-                break
-        
-        # Anchor = where robot starts (before first move)
-        # First move goes to fitted_wps[0], so anchor = fitted_wps[0] - (first_dx, first_dy)
-        if fitted_wps and first_dx is not None and first_dy is not None:
-            pos_x = float(fitted_wps[0].x_mm) - first_dx
-            pos_y = float(fitted_wps[0].y_mm) - first_dy
-        elif fitted_wps:
+        # Start from anchor (fitted_wps[0] now contains bot position after replacement)
+        if fitted_wps and len(fitted_wps) > 0:
             pos_x = float(fitted_wps[0].x_mm)
             pos_y = float(fitted_wps[0].y_mm)
+            print(f"[EXPECT] Using anchor from fitted waypoints[0]: ({pos_x:.1f},{pos_y:.1f})")
+        elif start_pos is not None:
+            pos_x, pos_y = start_pos[0], start_pos[1]
+            print(f"[EXPECT] Using start_pos as anchor: ({pos_x:.1f},{pos_y:.1f})")
         else:
             pos_x = pos_y = 0.0
+            print(f"[EXPECT] No anchor available, using origin")
         
-        print(f"[EXPECT] Inferred anchor=({pos_x:.1f},{pos_y:.1f}) first_move=({first_dx},{first_dy})")
+        # Now integrate all moves (firmware coordinates → board coordinates)
+        # Clamp to bounds to prevent out-of-bounds expected positions
+        bounds_for_clamp = cvp.get_board_bounds_mm()
+        min_x_bound = bounds_for_clamp[0] if bounds_for_clamp else 0.0
+        min_y_bound = bounds_for_clamp[1] if bounds_for_clamp else 0.0
+        max_x_bound = bounds_for_clamp[2] if bounds_for_clamp else 800.0
+        max_y_bound = bounds_for_clamp[3] if bounds_for_clamp else 400.0
         
-        # Now integrate all moves
         for i, raw in enumerate(lines):
             line = raw.strip()
             upper = line.upper()
@@ -493,10 +574,17 @@ def _send_with_cv_correction(
                 dx_match = re.search(r'\bX\s*([-+]?\d+)', upper)
                 dy_match = re.search(r'\bY\s*([-+]?\d+)', upper)
                 
+                # Apply axis signs to convert firmware → board coordinates
                 if dx_match:
-                    pos_x += float(dx_match.group(1))
+                    firmware_dx = float(dx_match.group(1))
+                    pos_x += firmware_dx * AXIS_SIGN['X']
                 if dy_match:
-                    pos_y += float(dy_match.group(1))
+                    firmware_dy = float(dy_match.group(1))
+                    pos_y += firmware_dy * AXIS_SIGN['Y']
+                
+                # Clamp to bounds to prevent invalid expected positions
+                pos_x = max(min_x_bound, min(pos_x, max_x_bound))
+                pos_y = max(min_y_bound, min(pos_y, max_y_bound))
             
             expected_pos_after_pid[i] = (pos_x, pos_y)
     except Exception as e:
@@ -531,7 +619,20 @@ def _send_with_cv_correction(
         except Exception:
             pass
 
+        # Get current index with validation
         current_idx = RUN.follower.index()
+        total_wps = RUN.follower.total()
+        
+        # Validate index is within bounds
+        if not RUN.follower.is_index_valid(current_idx):
+            print(f"[CORRECTION] WARNING: Invalid waypoint index {current_idx}/{total_wps}, skipping correction")
+            return []
+        
+        # Validate fitted_wps index is also valid
+        if current_idx >= len(fitted_wps):
+            print(f"[CORRECTION] WARNING: Index {current_idx} >= fitted_wps length {len(fitted_wps)}, skipping correction")
+            return []
+        
         next_is_g1 = bool(next_line and next_line.strip().startswith("G1"))
         # Compute distance to current target for better diagnostics
         dist_to_target = None
@@ -541,11 +642,12 @@ def _send_with_cv_correction(
             if tgt is not None and pose_dbg:
                 (cx_dbg, cy_dbg), _, _ = pose_dbg
                 dist_to_target = math.hypot(float(tgt.x_mm) - float(cx_dbg), float(tgt.y_mm) - float(cy_dbg))
-        except Exception:
+        except Exception as e:
+            print(f"[CORRECTION] Error computing dist_to_target: {e}")
             dist_to_target = None
 
         print(
-            f"[CORRECTION] follower at waypoint {current_idx}/{RUN.follower.total()}"
+            f"[CORRECTION] follower at waypoint {current_idx}/{total_wps}"
             + (f" dist_to_target={dist_to_target:.1f}mm" if dist_to_target is not None else "")
         )
         
@@ -565,11 +667,18 @@ def _send_with_cv_correction(
         except Exception as e_bounds:
             print(f"[CORRECTION] Bounds check failed: {e_bounds}")
 
-        correction = cvp.correction.compute_correction(
-            waypoints=fitted_wps,
-            current_index=current_idx,
-            next_is_g1=next_is_g1,
-        )
+        # Compute correction with validated index
+        try:
+            correction = cvp.correction.compute_correction(
+                waypoints=fitted_wps,
+                current_index=current_idx,
+                next_is_g1=next_is_g1,
+            )
+        except Exception as e_corr:
+            print(f"[CORRECTION] Error computing correction: {e_corr}")
+            import traceback
+            traceback.print_exc()
+            return []
         print(f"[CORRECTION CALLBACK] correction={correction}")
         if correction is None:
             # Extra diagnostics when the correction engine returns None
@@ -675,13 +784,15 @@ def _send_with_cv_correction(
         # Print expected vs actual before follower update
         try:
             (cx, cy), _, _ = pose
+            pose_age_check = cvp.pose_age_s()
             cur_idx = RUN.follower.index()
             cur_tgt = RUN.follower.current_target()
             if cur_tgt is not None:
                 dist = math.hypot(cur_tgt.x_mm - float(cx), cur_tgt.y_mm - float(cy))
+                age_str = f" age={pose_age_check:.1f}s" if pose_age_check is not None else ""
                 print(
                     f"[TARGET] pid={head_pid} line='{head_line.strip()}' idx={cur_idx} "
-                    f"target=({cur_tgt.x_mm:.1f},{cur_tgt.y_mm:.1f}) pose=({float(cx):.1f},{float(cy):.1f}) dist={dist:.1f}mm"
+                    f"target=({cur_tgt.x_mm:.1f},{cur_tgt.y_mm:.1f}) pose=({float(cx):.1f},{float(cy):.1f}) dist={dist:.1f}mm{age_str}"
                 )
         except Exception:
             pass
@@ -690,6 +801,9 @@ def _send_with_cv_correction(
             reached, dev_mm = RUN.follower.update_and_check_reached(pose)
         except Exception as e:
             print(f"[FOLLOWER] update error: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't return - continue processing even if update fails
             return
 
         if dev_mm is not None:
@@ -775,7 +889,7 @@ def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800
         cv2.imwrite(canonical_png, im)
 
     with _in_dir(PATHFINDING_DIR):
-        graph, endpoints = img2graph(name, canvas_size=canvas_size)
+        graph, endpoints = img2graph(name, granularity=3, canvas_size=canvas_size)
         path = graph2path(graph, endpoints, canvas_size=canvas_size)
         os.makedirs(os.path.dirname(out_gcode_path), exist_ok=True)
         path2gcode(path, filename=out_gcode_path)
@@ -994,13 +1108,35 @@ def erase():
                     gcode_str = _read_gcode_text("erase")
                     # Use actual bot position from CV as starting point
                     bot_pose = cvp.get_pose_mm()
+                    
+                    # Get bounds for validation
+                    bounds = cvp.get_board_bounds_mm()
+                    board_size = cvp.board_size_mm()
+                    
+                    if board_size:
+                        print(f"[BOARD] Physical size: {board_size[0]:.1f}mm × {board_size[1]:.1f}mm")
+                    if bounds:
+                        min_x, min_y, max_x, max_y = bounds
+                        print(f"[BOARD] Safe drawing zone: [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
+                    
                     if bot_pose:
                         (bot_x, bot_y), _, _ = bot_pose
+                        print(f"[START] Bot detected at: ({bot_x:.1f}, {bot_y:.1f})mm")
+                        
+                        if bounds:
+                            min_x, min_y, max_x, max_y = bounds
+                            if not (min_x <= bot_x <= max_x and min_y <= bot_y <= max_y):
+                                print(f"[START] WARNING: Bot position OUT OF BOUNDS [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
+                                print(f"[START] Using bot position anyway - robot must start from where it is!")
+                        
+                        # Always use actual bot position, even if out of bounds
                         start_pos = (bot_x, bot_y)
-                        print(f"[START] Using bot position from CV: ({bot_x:.1f}, {bot_y:.1f})mm")
+                        fitted[0] = Waypoint(x_mm=bot_x, y_mm=bot_y)
+                        print(f"[START] Anchor set to bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
                     else:
+                        print(f"[START] ERROR: No bot pose detected!")
                         start_pos = _first_waypoint_pos(fitted)
-                        print(f"[START] No bot pose available, using first waypoint: {start_pos}")
+                        print(f"[START] Falling back to first fitted waypoint: {start_pos}")
                     firmware_gcode = cvp.build_firmware_gcode(
                         gcode_str,
                         start_pos=start_pos,
@@ -1009,7 +1145,7 @@ def erase():
                     )
                     
                     # Send with CV correction enabled
-                    _send_with_cv_correction(firmware_gcode, fitted, window_size=3)
+                    _send_with_cv_correction(firmware_gcode, fitted, start_pos=start_pos, window_size=3)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 
@@ -1018,6 +1154,154 @@ def erase():
         return render_template("index.html", page="erase", msg=msg, error=error)
 
     return render_template("index.html", page="erase", msg=msg, error=error)
+
+
+@app.route("/erase_smudges", methods=["GET", "POST"])
+def erase_smudges():
+    """CV-based smudge detection and targeted erasing."""
+    _ensure_cv_thread()
+    STATE["mode"] = "erase_smudges"
+    msg = None
+    error = None
+    
+    if request.method == "POST":
+        action = request.form.get("action", "start")
+        if action == "stop":
+            RUN.stop()
+            return redirect(url_for("erase_smudges"))
+        
+        # Check if board is calibrated
+        if cvp.cal.board_pose is None:
+            error = "Board not calibrated yet. Please calibrate first."
+            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+        
+        # Capture current frame
+        cam = get_cam()
+        if cam is None:
+            error = "Camera not available"
+            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+        
+        frame = cam.read()
+        if frame is None:
+            error = "Failed to capture frame from camera"
+            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+        
+        # Get current bot position
+        bot_pose = cvp.get_pose_mm()
+        if bot_pose:
+            (bot_x, bot_y), _, _ = bot_pose
+            current_position = (bot_x, bot_y)
+            print(f"[SMUDGE_ERASE] Bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
+        else:
+            # Use center of board as fallback
+            board_size = cvp.board_size_mm()
+            if board_size:
+                current_position = (board_size[0] / 2, board_size[1] / 2)
+            else:
+                current_position = (400, 200)  # Default fallback
+            print(f"[SMUDGE_ERASE] No bot pose, using fallback: {current_position}")
+        
+        # Import smudge detection module
+        from app.smudge_detection import generate_smudge_erase_gcode
+        
+        # Get detection parameters from form (with defaults)
+        try:
+            darkness_threshold = int(request.form.get("darkness_threshold", 200))
+            min_smudge_area = float(request.form.get("min_smudge_area", 25.0))
+            line_spacing = float(request.form.get("line_spacing", 5.0))
+        except ValueError:
+            darkness_threshold = 200
+            min_smudge_area = 25.0
+            line_spacing = 5.0
+        
+        # Detect smudges and generate G-code
+        try:
+            gcode_lines, smudge_contours = generate_smudge_erase_gcode(
+                frame_bgr=frame,
+                H_img2board=cvp.cal.board_pose.H_img2board,
+                board_width_mm=800.0,  # KNOWN_BOARD_WIDTH_MM
+                board_height_mm=400.0,  # KNOWN_BOARD_HEIGHT_MM
+                current_position=current_position,
+                detector_params={
+                    "darkness_threshold": darkness_threshold,
+                    "min_smudge_area_mm2": min_smudge_area,
+                },
+                path_params={
+                    "line_spacing_mm": line_spacing,
+                },
+            )
+            
+            if not gcode_lines:
+                msg = "No smudges detected! Board appears clean."
+                return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+            
+            print(f"[SMUDGE_ERASE] Detected {len(smudge_contours)} smudge(s)")
+            print(f"[SMUDGE_ERASE] Generated {len(gcode_lines)} G-code lines")
+            
+            # Convert G-code lines to waypoints for CV correction
+            waypoints = []
+            current_x, current_y = current_position
+            pen_down = False
+            
+            for line in gcode_lines:
+                line = line.strip()
+                if not line or line.startswith(";"):
+                    continue
+                
+                # Parse G1 commands
+                if line.startswith("G1"):
+                    # Extract X and Y if present
+                    x = current_x
+                    y = current_y
+                    
+                    if "X" in line:
+                        try:
+                            x_str = line.split("X")[1].split()[0]
+                            x = float(x_str)
+                        except (IndexError, ValueError):
+                            pass
+                    
+                    if "Y" in line:
+                        try:
+                            y_str = line.split("Y")[1].split()[0]
+                            y = float(y_str)
+                        except (IndexError, ValueError):
+                            pass
+                    
+                    # Add waypoint if pen is down (erasing)
+                    if pen_down:
+                        waypoints.append(Waypoint(x_mm=x, y_mm=y))
+                    
+                    current_x = x
+                    current_y = y
+                
+                # Track pen state
+                elif "M280 P0 S0" in line:
+                    pen_down = True
+                elif "M280 P0 S90" in line:
+                    pen_down = False
+            
+            # Send G-code with CV correction
+            gcode_str = "\n".join(gcode_lines)
+            
+            if waypoints:
+                print(f"[SMUDGE_ERASE] Extracted {len(waypoints)} waypoints for CV correction")
+                _send_with_cv_correction(gcode_str, waypoints, start_pos=current_position, window_size=3)
+                msg = f"Detected {len(smudge_contours)} smudge(s). Generated {len(gcode_lines)} commands with {len(waypoints)} waypoints. Erasing..."
+            else:
+                # No waypoints (only pen lifts/drops), send directly
+                print("[SMUDGE_ERASE] No waypoints extracted, sending commands directly")
+                bt.send_gcode(gcode_str)
+                msg = f"Detected {len(smudge_contours)} smudge(s). Sent {len(gcode_lines)} commands."
+        
+        except Exception as e:
+            import traceback
+            error = f"Failed to detect/erase smudges: {e}"
+            print(f"[SMUDGE_ERASE] ERROR: {traceback.format_exc()}")
+            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+    
+    return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+
 
 @app.route("/draw", methods=["GET", "POST"])
 def draw():
@@ -1044,7 +1328,7 @@ def draw():
             try:
                 base = os.path.splitext(fname)[0]
                 gcode_path = os.path.join("uploads", f"{base}.gcode")
-                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(800, 400))
+                gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(900, 530))
                 ops = load_gcode_file(gcode_path)
                 raw_norm, norm_origin = _ops_to_normalized_wps(ops, return_origin=True)
             except Exception as e:
@@ -1078,15 +1362,46 @@ def draw():
                     # Use actual bot position from CV as starting point (retry up to 10s)
                     bot_pose = _wait_for_pose(10.0)
                     if not bot_pose:
-                        # final fallback to immediate read
+                        # Try to get cached pose if available
                         bot_pose = cvp.get_pose_mm()
+                        if bot_pose:
+                            print(f"[START] Using cached pose (no fresh detection)")
+                    
+                    # Get bounds for validation
+                    bounds = cvp.get_board_bounds_mm()
+                    board_size = cvp.board_size_mm()
+                    
+                    if board_size:
+                        print(f"[BOARD] Physical size: {board_size[0]:.1f}mm × {board_size[1]:.1f}mm")
+                    if bounds:
+                        min_x, min_y, max_x, max_y = bounds
+                        print(f"[BOARD] Safe drawing zone: [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
+                    
                     if bot_pose:
                         (bot_x, bot_y), _, _ = bot_pose
+                        print(f"[START] Bot detected at: ({bot_x:.1f}, {bot_y:.1f})mm")
+                        
+                        if bounds:
+                            min_x, min_y, max_x, max_y = bounds
+                            if not (min_x <= bot_x <= max_x and min_y <= bot_y <= max_y):
+                                print(f"[START] WARNING: Bot position OUT OF BOUNDS [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
+                                print(f"[START] Using bot position anyway - robot must start from where it is!")
+                        
+                        # Always use actual bot position, even if out of bounds
+                        # The robot HAS to start from where it physically is
                         start_pos = (bot_x, bot_y)
-                        print(f"[START] Using bot position from CV: ({bot_x:.1f}, {bot_y:.1f})mm")
+                        fitted[0] = Waypoint(x_mm=bot_x, y_mm=bot_y)
+                        print(f"[START] Anchor set to bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
                     else:
+                        print(f"[START] WARNING: No bot pose detected after 10s wait!")
+                        print(f"[START] This may cause waypoint following issues - robot position unknown")
+                        # Use first fitted waypoint but warn that this might be wrong
                         start_pos = _first_waypoint_pos(fitted)
-                        print(f"[START] No bot pose available, using first waypoint: {start_pos}")
+                        if start_pos:
+                            print(f"[START] Falling back to first fitted waypoint: {start_pos}")
+                            print(f"[START] NOTE: Follower will try to skip waypoint 0 if robot is far away")
+                        else:
+                            error = "No waypoints available and no bot pose detected"
                     firmware_gcode = cvp.build_firmware_gcode(
                         gcode_str,
                         start_pos=start_pos,
@@ -1096,7 +1411,7 @@ def draw():
                     print("Built firmware G-code:")
                     print(firmware_gcode)
                     print(f"Built firmware G-code with {len(firmware_gcode.splitlines())} lines.")              
-                    _send_with_cv_correction(firmware_gcode, fitted, window_size=3)
+                    _send_with_cv_correction(firmware_gcode, fitted, start_pos=start_pos, window_size=3)
                 except Exception as e:
                     error = f"Failed to send G-code: {e}"
 

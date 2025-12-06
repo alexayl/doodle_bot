@@ -314,7 +314,7 @@ class BTLink:
         window_size: int = 5,
         on_head_executed = None,
         correction_cb = None,
-        exec_timeout_s: float = 30.0,
+        exec_timeout_s: float = None,  # Auto-calculated if None
     ) -> None:
         """
         Stream G-code with a sliding window of motion instructions. Each ACK
@@ -341,10 +341,18 @@ class BTLink:
         lines = [ln for ln in raw_lines if ln and not ln.startswith(";")]
         if not lines:
             return
+        
+        # Auto-calculate timeout: 2 seconds per line minimum, 60s minimum total
+        if exec_timeout_s is None:
+            exec_timeout_s = max(60.0, len(lines) * 2.0)
+        
+        print(f"[WINDOWED] Sending {len(lines)} lines with {exec_timeout_s:.0f}s timeout")
 
         pending = lines[:]  # queue of lines left to send (including corrections inserted)
         inflight: list[tuple[int, str]] = []  # (pid, line)
         start_time = time.time()
+        last_progress_time = start_time
+        total_lines = len(lines)  # Original count for progress tracking
 
         def _send_line(line: str):
             while self.instructions_in_flight >= window_size:
@@ -360,9 +368,21 @@ class BTLink:
             _send_line(pending.pop(0))
 
         while pending or inflight:
-            # Timeout check
-            if (time.time() - start_time) > exec_timeout_s:
-                raise TimeoutError("Execution timed out waiting for ACKs")
+            # Timeout check with progress logging
+            elapsed = time.time() - start_time
+            if elapsed > exec_timeout_s:
+                print(f"[WINDOWED] TIMEOUT after {elapsed:.1f}s")
+                print(f"[WINDOWED] Pending: {len(pending)}, In-flight: {len(inflight)}")
+                if inflight:
+                    print(f"[WINDOWED] Stuck waiting for ACK to: {inflight[0]}")
+                raise TimeoutError(f"Execution timed out after {elapsed:.1f}s waiting for ACKs")
+            
+            # Progress logging every 5 seconds
+            if elapsed - last_progress_time > 5.0:
+                completed = total_lines - len(pending)
+                progress_pct = (completed / total_lines) * 100 if total_lines > 0 else 0
+                print(f"[WINDOWED] Progress: {completed}/{total_lines} ({progress_pct:.0f}%) - {len(inflight)} in-flight")
+                last_progress_time = elapsed + start_time
 
             ack_pid = None
             ack_msg = None
@@ -410,4 +430,6 @@ class BTLink:
                     _send_line(pending.pop(0))
 
         # Done
+        elapsed = time.time() - start_time
+        print(f"[WINDOWED] Completed {total_lines} lines in {elapsed:.1f}s")
         return
