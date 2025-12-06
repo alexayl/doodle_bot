@@ -6,12 +6,36 @@ import numpy as np
 import time
 
 def get_distance(node1, node2, graph):
-    """Return 0 if nodes share the same componentID, else Euclidean distance."""
+    """
+    Return 0 if nodes share the same componentID, else Euclidean distance.
+    
+    Args: 
+        node1 (tuple): Coordinates of the first node.
+        node2 (tuple): Coordinates of the second node.
+        graph (networkx.Graph): The graph containing the nodes.
+    
+    Returns:
+        float: 0 if same componentID, else Euclidean distance.
+    """
     if graph.nodes[node1]['componentID'] == graph.nodes[node2]['componentID']:
         return 0
     return np.linalg.norm(np.array(node1) - np.array(node2))
 
 def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 1460), debug=False, save=False):
+    """
+    Convert a graph to an optimized path visiting all endpoints.
+    
+    Args:
+        graph (networkx.Graph): The input graph.
+        endpoints (list): List of endpoint nodes.
+        starting_node_inset_p (float): Inset percentage for starting node position.
+        canvas_size (tuple): Size of the canvas (width, height).
+        debug (bool): Whether to display debug information.
+        save (bool): Whether to save debug information.
+
+    Returns:
+        list: A list of segments representing the optimized path.
+    """
 
     # Add a starting node at the top left corner
     starting_node = (int(canvas_size[0] * starting_node_inset_p), \
@@ -26,10 +50,7 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 
     graph_nodes = set(graph.nodes())
     endpoints = [node for node in endpoints if node in graph_nodes]
 
-    # to_remove = [node for node in graph_nodes if node not in endpoints]
-    # graph.remove_nodes_from(to_remove)
-
-    # Build a nearest neighbor route starting and ending at endpoints[0]
+    # Build a nearest neighbor route starting and ending at endpoints[0] greedy
     start = endpoints[0]
     unvisited = set(endpoints[1:])
     path = [start]
@@ -43,47 +64,6 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 
     endpoints = path
     print("Nearest neighbor path found successfully")
 
-    # Add edges along the path
-    # for i in range(len(endpoints) - 1):
-    #     node1, node2 = endpoints[i], endpoints[i + 1]
-    #     distance = get_distance(node1, node2, graph)
-    #     if distance == 0:
-    #         continue
-    #     graph.add_edge(node1, node2, weight=distance, color='red')
-
-    # print("Edges added for nearest neighbor path. Ready for 2-opt optimization...")
-
-    def calc_total_distance(path, graph):
-        total = 0
-        for i in range(len(path) - 1):
-            total += get_distance(path[i], path[i + 1], graph)
-        total += get_distance(path[-1], path[0], graph)
-        return total
-
-    def two_opt(path, graph, max_iterations=1000):
-        best = path
-        best_distance = calc_total_distance(best, graph)
-        improved = True
-        iteration = 0
-        while improved and iteration < max_iterations:
-            improved = False
-            iteration += 1
-            for i in range(1, len(best) - 2):
-                for j in range(i + 1, len(best)):
-                    if j - i == 1:
-                        continue
-                    new_path = best[:i] + best[i:j][::-1] + best[j:]
-                    new_distance = calc_total_distance(new_path, graph)
-                    if new_distance < best_distance:
-                        best = new_path
-                        best_distance = new_distance
-                        improved = True
-            print(f"Iteration {iteration}: current best distance = {best_distance:.2f}")
-        return best
-
-    # print("Running 2-opt optimization...")
-    # optimized_path = two_opt(endpoints, graph)
-
     optimized_path = endpoints
 
     # Draw optimized path
@@ -95,6 +75,7 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 
         distance = get_distance(node1, node2, graph)
         graph.add_edge(node1, node2, weight=distance, color='red')
 
+    # Visualize graph with optimized path
     if debug or save:
         cols, rows = canvas_size
         aspect_ratio = cols / rows
@@ -115,6 +96,7 @@ def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 
             save_image(fig, "path_" + img_name, "outputs/path/", extension=".png")
         plt.close(fig)
 
+    # construct path in correct data type
     segments = [[optimized_path[0]]]
     for i in range(1, len(optimized_path) - 1, 2):
         starting_endpoint = optimized_path[i]
@@ -152,7 +134,7 @@ if __name__ == "__main__":
     save_all = args.save
     save_array = []
 
-    canvas_size = (575, 730)
+    canvas_size = (900, 530)
     
     if debug_all == True:
         display_array = [True]
@@ -160,7 +142,7 @@ if __name__ == "__main__":
     if save_all == True:
         save_array = [True]
 
-    graph, endpoints = img2graph(img_name, canvas_size=canvas_size, debug=[False, False, False, False], 
+    graph, endpoints = img2graph(img_name, granularity=5, canvas_size=canvas_size, debug=[False, False, False, False], 
                       save=[False, False, False, False])
     
     if args.time:

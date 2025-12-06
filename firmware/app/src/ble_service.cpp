@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include "ble_service.h"
+#include "comms_thread.h"
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -23,7 +24,21 @@ struct bt_nus_cb BleService::nus_listener = {
     .received = BleService::received,
 };
 
-// Static callback implementations
+static struct k_work_delayable adv_restart_work;
+
+static void adv_restart_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+    if (BleService::instance) {
+        BleService::instance->startAdvertising();
+    }
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+    .connected = BleService::connected,
+    .disconnected = BleService::disconnected,
+};
+
+// Static callback implementations for NUS
 void BleService::notif_enabled(bool enabled, void *ctx) {
     ARG_UNUSED(ctx);
     #ifdef DEBUG_BLE
@@ -41,6 +56,25 @@ void BleService::received(struct bt_conn *conn, const void *data, uint16_t len, 
     }
 }
 
+void BleService::connected(struct bt_conn *conn, uint8_t err) {
+    if (err) {
+        printk("BLE_CONN::ERROR: Connection failed (err %u)\n", err);
+        k_work_schedule(&adv_restart_work, K_MSEC(100));
+        return;
+    }
+    printk("BLE_CONN::SUCCESS: Device connected\n");
+}
+
+void BleService::disconnected(struct bt_conn *conn, uint8_t reason) {
+    printk("BLE_CONN::INFO: Device disconnected (reason %u)\n", reason);
+    
+    // Reset comms state (packet ID counter, etc.)
+    comms_reset();
+    
+    // Schedule advertising restart via work queue (deferred to system workqueue context)
+    k_work_schedule(&adv_restart_work, K_MSEC(100));
+}
+
 
 /* INSTANCE METHODS */
 
@@ -48,6 +82,8 @@ void BleService::init() {
 
     // Set static instance pointer for callbacks
     BleService::instance = this;
+
+    k_work_init_delayable(&adv_restart_work, adv_restart_work_handler);
 
     int err;
 
@@ -63,14 +99,21 @@ void BleService::init() {
 		return;
 	}
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-	if (err) {
-		printk("BLE_INIT::ERROR: Failed to start advertising: %d\n", err);
-		return;
-	}
+	startAdvertising();
     #ifdef DEBUG_BLE
 	printk("BLE_INIT::SUCCESS: Initialization complete\n");
     #endif
+}
+
+void BleService::startAdvertising() {
+	bt_le_adv_stop();
+	
+	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	if (err) {
+		printk("BLE_ADV::ERROR: Failed to start advertising: %d\n", err);
+		return;
+	}
+	printk("BLE_ADV::SUCCESS: Advertising started, waiting for connection...\n");
 }
 
 void BleService::send(const char *data, size_t len) {
