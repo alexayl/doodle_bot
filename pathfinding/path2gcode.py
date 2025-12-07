@@ -7,11 +7,11 @@ def path2gcode(path, filename="output.gcode"):
     
     # start with absolute positioning
     gcode = []
-    # gcode.append("G90 ; use absolute positioning")
-    # x, y = path[0][0]
-    # gcode.append("M280 P0 S90 ; pen up")
-    # gcode.append(f"G1 X{x} Y{y} ; move to start position")
-    # gcode.append("G91 ; switch to relative positioning")
+    gcode.append("G90") # use absolute positioning
+    x, y = path[0][0]
+    gcode.append("M280 P0 S40") # pen up
+    gcode.append(f"G1 X{x} Y{y}") # move to start position
+    gcode.append("G91") # switch to relative positioning
 
     def write_move(dx, dy):
         gcode.append(f"G1 X{dx} Y{dy}")
