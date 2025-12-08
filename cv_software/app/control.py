@@ -111,6 +111,58 @@ class PathFollower:
             print(f"[FOLLOWER] Deduplicated waypoints: {len(wps)} → {len(deduped)} (removed {len(wps) - len(deduped)} duplicates)")
         
         return deduped
+    
+    def _simplify_path(self, wps: List[Waypoint], angle_threshold_deg: float = 5.0, min_segment_mm: float = 2.0) -> List[Waypoint]:
+        """Simplify path by removing collinear waypoints while preserving path shape.
+        
+        Uses Ramer-Douglas-Peucker-like approach:
+        - Remove waypoints that are nearly collinear with neighbors
+        - Keep waypoints that represent significant direction changes
+        - Always preserve first and last waypoints
+        """
+        if len(wps) <= 2:
+            return wps
+        
+        simplified = [wps[0]]  # Always keep first
+        
+        for i in range(1, len(wps) - 1):
+            prev = simplified[-1]
+            curr = wps[i]
+            next_wp = wps[i + 1]
+            
+            # Vector from prev to curr
+            v1x = curr.x_mm - prev.x_mm
+            v1y = curr.y_mm - prev.y_mm
+            len1 = math.hypot(v1x, v1y)
+            
+            # Vector from curr to next
+            v2x = next_wp.x_mm - curr.x_mm
+            v2y = next_wp.y_mm - curr.y_mm
+            len2 = math.hypot(v2x, v2y)
+            
+            # Skip if segments are too short
+            if len1 < min_segment_mm or len2 < min_segment_mm:
+                simplified.append(curr)
+                continue
+            
+            # Compute angle between vectors
+            # cos(theta) = (v1 · v2) / (|v1| * |v2|)
+            dot = v1x * v2x + v1y * v2y
+            cos_angle = dot / (len1 * len2)
+            cos_angle = max(-1.0, min(1.0, cos_angle))  # Clamp for numerical stability
+            angle_deg = math.degrees(math.acos(cos_angle))
+            
+            # Keep waypoint if angle is significant (direction change)
+            if angle_deg >= angle_threshold_deg:
+                simplified.append(curr)
+            # Otherwise skip this waypoint (nearly collinear)
+        
+        simplified.append(wps[-1])  # Always keep last
+        
+        if len(simplified) < len(wps):
+            print(f"[FOLLOWER] Simplified path: {len(wps)} → {len(simplified)} waypoints (removed {len(wps) - len(simplified)} collinear points)")
+        
+        return simplified
 
     def load_waypoints(self, wps: List[Waypoint], bounds: Optional[Tuple[float, float, float, float]] = None) -> None:
         """Load and validate waypoints."""
@@ -142,6 +194,14 @@ class PathFollower:
         
         # Deduplicate waypoints
         valid_wps = self._deduplicate_waypoints(valid_wps)
+        
+        # Simplify path by removing collinear waypoints (improves efficiency)
+        # More aggressive simplification for long paths
+        if len(valid_wps) > 50:
+            valid_wps = self._simplify_path(valid_wps, angle_threshold_deg=3.0, min_segment_mm=1.5)
+        elif len(valid_wps) > 20:
+            valid_wps = self._simplify_path(valid_wps, angle_threshold_deg=5.0, min_segment_mm=2.0)
+        # Keep very short paths as-is for precision
         
         # Validate waypoints are within bounds if provided (skip first waypoint - it's the bot's actual position)
         if bounds and len(valid_wps) > 1:
@@ -393,7 +453,8 @@ class PathFollower:
                     
                     # Advance if we've passed the waypoint along the path (along > 0) and cross-track is reasonable
                     # OR if we're more than 50% along the segment
-                    if (along > dynamic_eps and cross <= cross_threshold) or (along > seg_len * 0.5):
+                    # DISABLE for first 10 waypoints to prevent startup skipping due to anchor mismatch
+                    if self._i >= 10 and ((along > dynamic_eps and cross <= cross_threshold) or (along > seg_len * 0.5)):
                         print(f"[FOLLOWER] Advanced past waypoint {self._i} (along={along:.1f}mm/{seg_len:.1f}mm, cross={cross:.1f}mm)")
                         self._i += 1
                         continue
@@ -404,8 +465,9 @@ class PathFollower:
                     self._i += 1
                     continue
 
-            # Special case: if waypoint is very far away, check if we're closer to next waypoint
-            if dist > 150.0 and len(self._wps) > self._i + 1:
+            # Special case: if waypoint is very far away AND we've already made progress, check if we're closer to next waypoint
+            # Don't skip early waypoints (first 5) - they represent the actual drawing path from the start position
+            if dist > 150.0 and self._i >= 5 and len(self._wps) > self._i + 1:
                 nxt = self._wps[self._i + 1]
                 dist_to_next = math.hypot(nxt.x_mm - x, nxt.y_mm - y)
                 if dist_to_next < dist * 0.7:  # At least 30% closer to next waypoint

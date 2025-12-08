@@ -272,10 +272,18 @@ class BoardCalibrator:
         return cv2.undistort(frame_bgr, self.cam.K, self.cam.dist, None, K_new)
 
     def _collect_corners(self, id_map: Dict[int, np.ndarray]) -> Dict[str, np.ndarray]:
+        """Collect corners with centroid computation for stability."""
         have: Dict[str, np.ndarray] = {}
         for name, mid in BOARD_CORNERS.items():
             if mid in id_map:
-                have[name] = id_map[mid].mean(axis=0)
+                # Use centroid of marker corners for more stable position
+                corners = id_map[mid]
+                if len(corners) >= 4:
+                    # Compute centroid (mean of all 4 corners)
+                    centroid = corners.mean(axis=0)
+                    have[name] = centroid
+                else:
+                    have[name] = corners.mean(axis=0)
         return have
 
     def _complete_quad(self, cs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
@@ -478,12 +486,34 @@ class BoardCalibrator:
             dtype=np.float32,
         )
 
-        # Use stricter RANSAC threshold for better outlier rejection
-        H, mask = cv2.findHomography(img_pts, board_rect, cv2.RANSAC, 2.0, maxIters=2000)
+        # Adaptive RANSAC threshold based on marker confidence and corner count
+        # Higher confidence → tighter threshold for better precision
+        # Lower confidence → looser threshold to accept more uncertain matches
+        base_threshold = 2.0
+        if found == 4:  # All corners detected
+            ransac_thresh = base_threshold * (1.0 - 0.3 * conf_raw)  # 1.4-2.0px
+        else:  # 3 corners (one completed)
+            ransac_thresh = base_threshold * 1.5  # More lenient: 3.0px
+        
+        # Compute homography with adaptive RANSAC
+        H, mask = cv2.findHomography(img_pts, board_rect, cv2.RANSAC, ransac_thresh, maxIters=2000)
         if H is None:
+            if not hasattr(self, '_last_h_fail_log') or time.time() - self._last_h_fail_log > 3.0:
+                print(f"[BOARD_CAL] findHomography failed (corners={found}, thresh={ransac_thresh:.2f}px)")
+                self._last_h_fail_log = time.time()
             return prev
+        
+        # Normalize homography
         if abs(H[2, 2]) > 1e-12:
             H = H / H[2, 2]
+        
+        # Check condition number before accepting
+        cond_H = np.linalg.cond(H)
+        if cond_H > _COND_HARD_LIMIT:
+            if not hasattr(self, '_last_cond_reject_log') or time.time() - self._last_cond_reject_log > 3.0:
+                print(f"[BOARD_CAL] Rejected: Ill-conditioned homography (cond={cond_H:.1e} > {_COND_HARD_LIMIT:.1e})")
+                self._last_cond_reject_log = time.time()
+            return prev
         
         # Apply temporal filtering for stability
         H = self._temporal_filter_homography(H, conf_raw)
@@ -491,6 +521,17 @@ class BoardCalibrator:
         width_px = float(np.linalg.norm(tr - tl))
         height_px = float(np.linalg.norm(bl - tl))
         cond_H = np.linalg.cond(H)
+        
+        # Compute reprojection error for quality assessment
+        reproj_pts = cv2.perspectiveTransform(board_rect.reshape(-1, 1, 2), np.linalg.inv(H)).reshape(-1, 2)
+        reproj_error = np.mean(np.linalg.norm(img_pts - reproj_pts, axis=1))
+        
+        # Reject if reprojection error is too high (indicates poor fit)
+        if reproj_error > 10.0:  # 10px threshold
+            if not hasattr(self, '_last_reproj_reject_log') or time.time() - self._last_reproj_reject_log > 3.0:
+                print(f"[BOARD_CAL] Rejected: High reprojection error {reproj_error:.2f}px (threshold 10.0px)")
+                self._last_reproj_reject_log = time.time()
+            return prev
 
         if conf_raw < _CONF_MIN_BOARD:
             if not hasattr(self, "_low_conf_log") or time.time() - self._low_conf_log > 2.0:
@@ -579,8 +620,8 @@ class BotTracker:
         self._position_history: List[Tuple[float, float, float]] = []  # (x, y, timestamp)
         self._position_history_max = 10
         self._max_position_jump_mm = 200.0  # Max position change between frames (increased for fast movement)
-        self._min_baseline_mm = 100.0  # Min baseline length (accounts for perspective angle)
-        self._max_baseline_mm = 250.0  # Max baseline length (accounts for perspective angle)
+        self._min_baseline_mm = 85.0  # Min baseline length (accounts for extreme camera angles)
+        self._max_baseline_mm = 260.0  # Max baseline length (accounts for perspective angle)
         
         # Adaptive baseline tracking
         self._baseline_history: List[float] = []
@@ -685,15 +726,15 @@ class BotTracker:
             
             # Use mean ± 2.5*std for more lenient range, but ensure minimum range
             # Add padding to avoid edge cases (e.g., 127.1mm rejected when min is 127.2mm)
-            padding = max(5.0, std_baseline * 0.5)  # At least 5mm padding, or 0.5*std
-            adaptive_min = max(80.0, mean_baseline - 2.5 * std_baseline - padding)
-            adaptive_max = min(280.0, mean_baseline + 2.5 * std_baseline + padding)
+            padding = max(10.0, std_baseline * 0.5)  # At least 10mm padding, or 0.5*std
+            adaptive_min = max(70.0, mean_baseline - 2.5 * std_baseline - padding)
+            adaptive_max = min(300.0, mean_baseline + 2.5 * std_baseline + padding)
             
-            # Ensure minimum range of at least 50mm
-            if adaptive_max - adaptive_min < 50.0:
+            # Ensure minimum range of at least 100mm to handle camera angle variation
+            if adaptive_max - adaptive_min < 100.0:
                 center = (adaptive_min + adaptive_max) / 2.0
-                adaptive_min = max(80.0, center - 25.0)
-                adaptive_max = min(280.0, center + 25.0)
+                adaptive_min = max(70.0, center - 50.0)
+                adaptive_max = min(300.0, center + 50.0)
             
             # Only update if the adaptive range is reasonable
             if adaptive_max - adaptive_min >= 50.0:
@@ -898,6 +939,7 @@ class BotTracker:
             baseline_mm=baseline,
             confidence=conf,
         )
+        # print(f"BOT_TRACK: Valid pose: center=({center[0]:.1f},{center[1]:.1f})mm heading={math.degrees(heading):.1f}° baseline={baseline:.1f}mm conf={conf:.2f}")
         self._last_valid_pose = (pose, time.time())
         return pose
 

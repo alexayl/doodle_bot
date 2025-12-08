@@ -27,10 +27,18 @@ from app.utils import encode_jpeg, Metrics
 # -----------------------------------------------------------------------------#
 USE_TURBOJPEG = True  # encode_jpeg handles fallback
 CAMERA_SRC = int(os.getenv("CAMERA_SRC", "0"))
+
+# Base directory for cv_software (parent of app/)
+CV_SOFTWARE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 PATHFINDING_DIR = os.getenv(
     "PATHFINDING_DIR",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "pathfinding")),
+    os.path.abspath(os.path.join(CV_SOFTWARE_DIR, "..", "pathfinding")),
 )
+
+# Absolute path to uploads directory
+UPLOADS_DIR = os.path.join(CV_SOFTWARE_DIR, "uploads")
+
 STREAM_JPEG_QUALITY = 75
 USE_CV_CORRECTION = bool(int(os.getenv("USE_CV_CORRECTION", "1")))  # Toggle CV correction on/off (default from env)
 
@@ -52,7 +60,7 @@ CACHED_POSE_MAX_FACTOR = _env_float("CACHED_POSE_MAX_FACTOR", 2.0)
 
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
-os.makedirs("uploads", exist_ok=True)
+os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 STATE = {"mode": "home", "target_image": None}
 MET = Metrics(maxlen=240)
@@ -504,7 +512,11 @@ def _send_with_cv_correction(
     # Validate waypoint count
     if len(path_wps) < 2:
         raise RuntimeError(f"Insufficient waypoints for path following: {len(path_wps)} (need at least 2)")
-    
+    # for i, wp in enumerate(path_wps):
+    #     if not (isinstance(wp.x_mm, float) and isinstance(wp.y_mm, float)):
+    #         raise RuntimeError(f"Invalid waypoint at index {i}: ({wp.x_mm}, {wp.y_mm})")
+    #     else:
+    #         print(f"[SEND] Waypoint {i}: ({wp.x_mm:.1f}, {wp.y_mm:.1f})mm")
     print(f"[SEND] Validated {len(path_wps)} waypoints for path following")
 
     # Safety tuning: limit per-injection correction magnitude (mm)
@@ -864,6 +876,11 @@ def _assert_fitted_in_bounds(fitted):
 
 def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800, 400)) -> str:
     """Run the pathfinding stack and write G-code next to the uploaded image."""
+    print(f"[PATHFINDING] Starting conversion:")
+    print(f"  Input image: {img_path}")
+    print(f"  Output gcode: {out_gcode_path}")
+    print(f"  PATHFINDING_DIR: {PATHFINDING_DIR}")
+    
     if PATHFINDING_DIR not in sys.path:
         sys.path.insert(0, PATHFINDING_DIR)
     from img2graph import img2graph
@@ -881,21 +898,33 @@ def _convert_image_to_gcode(img_path: str, out_gcode_path: str, canvas_size=(800
     ext = Path(img_path).suffix.lower()
     if ext == ".png":
         if os.path.abspath(img_path) != os.path.abspath(canonical_png):
+            print(f"[PATHFINDING] Copying PNG: {img_path} -> {canonical_png}")
             shutil.copyfile(img_path, canonical_png)
     else:
+        print(f"[PATHFINDING] Converting {ext} to PNG: {canonical_png}")
         im = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if im is None:
             raise RuntimeError(f"Uploaded image could not be read: {img_path}")
         cv2.imwrite(canonical_png, im)
 
+    print(f"[PATHFINDING] Running pathfinding stack in {PATHFINDING_DIR}...")
     with _in_dir(PATHFINDING_DIR):
         graph, endpoints = img2graph(name, granularity=3, canvas_size=canvas_size)
+        print(f"[PATHFINDING] Graph generated with {len(graph)} nodes")
         path = graph2path(graph, endpoints, canvas_size=canvas_size)
+        print(f"[PATHFINDING] Path generated with {len(path)} points")
         os.makedirs(os.path.dirname(out_gcode_path), exist_ok=True)
         path2gcode(path, filename=out_gcode_path)
-        print(f"GCODE GENERATED: {out_gcode_path}")
-        for line in open(out_gcode_path, "r", encoding="utf-8"):
-            print(f"GCODE: {line.strip()}")
+        print(f"[PATHFINDING] GCODE GENERATED: {out_gcode_path}")
+        if os.path.isfile(out_gcode_path):
+            file_size = os.path.getsize(out_gcode_path)
+            print(f"[PATHFINDING] G-code file size: {file_size} bytes")
+            for i, line in enumerate(open(out_gcode_path, "r", encoding="utf-8")):
+                if i < 10:  # Only print first 10 lines
+                    print(f"GCODE: {line.strip()}")
+        else:
+            print(f"[PATHFINDING] ERROR: G-code file was not created!")
+            raise RuntimeError(f"G-code file not created: {out_gcode_path}")
 
     return out_gcode_path
 
@@ -996,11 +1025,23 @@ def _cv_worker():
             calibrated = st["calibrated"]
             if conf == 0:
                 calibrated = False
-            # print(
-            #     f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
-            #     f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
-            #     f"board conf={conf if conf is not None else 'NA'}, calibrated={calibrated}"
-            # )
+            
+            # Get path deviation metrics if path is active
+            rms_dev = None
+            try:
+                if RUN.active:
+                    rms_dev = cvp.correction.rms_deviation()
+            except Exception:
+                pass
+            
+            # Log metrics with optional RMS deviation
+            # if rms_dev is not None:
+            #     print(
+            #         f"[METRICS] median_cam_pose_latency={median_lat_ms:.1f}ms, "
+            #         f"update_rate={hz:.1f}Hz, uptime={uptime:.1f}%, "
+            #         f"board_conf={conf if conf is not None else 'NA'}, calibrated={calibrated}, "
+            #         f"path_rms_deviation={rms_dev:.2f}mm"
+            #     )
 
             # Auto-recalibration check
             # if conf is not None and conf < 0.6:
@@ -1081,9 +1122,11 @@ def home():
 
 @app.route("/erase", methods=["GET", "POST"])
 def erase():
+    """CV-based erase with automatic smudge detection and CV-corrected path following."""
     _ensure_cv_thread()
     STATE["mode"] = "erase"
-    msg = None; error = None
+    msg = None
+    error = None
 
     if request.method == "POST":
         action = request.form.get("action", "start")
@@ -1091,115 +1134,36 @@ def erase():
             RUN.stop()
             return redirect(url_for("erase"))
 
-        raw_norm, norm_origin = _load_named_gcode_normalized("erase", return_origin=False)
-        if not raw_norm:
-            error = "No erase path found in pathfinding directory."
-        else:
-            fitted = cvp.fit_path_to_board(raw_norm, margin_frac=0.10)
-            _assert_fitted_in_bounds(fitted)
-            if not fitted:
-                error = "Board not calibrated yet."
-            else:
-                # Home the bot to starting position first
-                # if not _home_bot():
-                #     error = "Failed to home bot to starting position"
-                # else:
-                try:
-                    gcode_str = _read_gcode_text("erase")
-                    # Use actual bot position from CV as starting point
-                    bot_pose = cvp.get_pose_mm()
-                    
-                    # Get bounds for validation
-                    bounds = cvp.get_board_bounds_mm()
-                    board_size = cvp.board_size_mm()
-                    
-                    if board_size:
-                        print(f"[BOARD] Physical size: {board_size[0]:.1f}mm × {board_size[1]:.1f}mm")
-                    if bounds:
-                        min_x, min_y, max_x, max_y = bounds
-                        print(f"[BOARD] Safe drawing zone: [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
-                    
-                    if bot_pose:
-                        (bot_x, bot_y), _, _ = bot_pose
-                        print(f"[START] Bot detected at: ({bot_x:.1f}, {bot_y:.1f})mm")
-                        
-                        if bounds:
-                            min_x, min_y, max_x, max_y = bounds
-                            if not (min_x <= bot_x <= max_x and min_y <= bot_y <= max_y):
-                                print(f"[START] WARNING: Bot position OUT OF BOUNDS [{min_x:.1f}-{max_x:.1f}, {min_y:.1f}-{max_y:.1f}]")
-                                print(f"[START] Using bot position anyway - robot must start from where it is!")
-                        
-                        # Always use actual bot position, even if out of bounds
-                        start_pos = (bot_x, bot_y)
-                        fitted[0] = Waypoint(x_mm=bot_x, y_mm=bot_y)
-                        print(f"[START] Anchor set to bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
-                    else:
-                        print(f"[START] ERROR: No bot pose detected!")
-                        start_pos = _first_waypoint_pos(fitted)
-                        print(f"[START] Falling back to first fitted waypoint: {start_pos}")
-                    firmware_gcode = cvp.build_firmware_gcode(
-                        gcode_str,
-                        start_pos=start_pos,
-                        fitted_wps=fitted,
-                        norm_origin=norm_origin,
-                    )
-                    
-                    # Send with CV correction enabled
-                    _send_with_cv_correction(firmware_gcode, fitted, start_pos=start_pos, window_size=3)
-                except Exception as e:
-                    error = f"Failed to send G-code: {e}"
-
-                msg = f"Erase queued with {len(fitted)} vertices and sent over BLE with CV correction."
-
-        return render_template("index.html", page="erase", msg=msg, error=error)
-
-    return render_template("index.html", page="erase", msg=msg, error=error)
-
-
-@app.route("/erase_smudges", methods=["GET", "POST"])
-def erase_smudges():
-    """CV-based smudge detection and targeted erasing."""
-    _ensure_cv_thread()
-    STATE["mode"] = "erase_smudges"
-    msg = None
-    error = None
-    
-    if request.method == "POST":
-        action = request.form.get("action", "start")
-        if action == "stop":
-            RUN.stop()
-            return redirect(url_for("erase_smudges"))
-        
         # Check if board is calibrated
         if cvp.cal.board_pose is None:
             error = "Board not calibrated yet. Please calibrate first."
-            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+            return render_template("index.html", page="erase", msg=msg, error=error)
         
-        # Capture current frame
+        # Capture current frame for smudge detection
         cam = get_cam()
         if cam is None:
             error = "Camera not available"
-            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+            return render_template("index.html", page="erase", msg=msg, error=error)
         
-        frame = cam.read()
+        frame = cam.get_latest_good()
         if frame is None:
             error = "Failed to capture frame from camera"
-            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+            return render_template("index.html", page="erase", msg=msg, error=error)
         
         # Get current bot position
         bot_pose = cvp.get_pose_mm()
         if bot_pose:
             (bot_x, bot_y), _, _ = bot_pose
             current_position = (bot_x, bot_y)
-            print(f"[SMUDGE_ERASE] Bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
+            print(f"[ERASE] Bot position: ({bot_x:.1f}, {bot_y:.1f})mm")
         else:
             # Use center of board as fallback
             board_size = cvp.board_size_mm()
             if board_size:
                 current_position = (board_size[0] / 2, board_size[1] / 2)
             else:
-                current_position = (400, 200)  # Default fallback
-            print(f"[SMUDGE_ERASE] No bot pose, using fallback: {current_position}")
+                current_position = (400, 200)
+            print(f"[ERASE] No bot pose, using fallback: {current_position}")
         
         # Import smudge detection module
         from app.smudge_detection import generate_smudge_erase_gcode
@@ -1219,8 +1183,8 @@ def erase_smudges():
             gcode_lines, smudge_contours = generate_smudge_erase_gcode(
                 frame_bgr=frame,
                 H_img2board=cvp.cal.board_pose.H_img2board,
-                board_width_mm=800.0,  # KNOWN_BOARD_WIDTH_MM
-                board_height_mm=400.0,  # KNOWN_BOARD_HEIGHT_MM
+                board_width_mm=800.0,
+                board_height_mm=400.0,
                 current_position=current_position,
                 detector_params={
                     "darkness_threshold": darkness_threshold,
@@ -1233,10 +1197,10 @@ def erase_smudges():
             
             if not gcode_lines:
                 msg = "No smudges detected! Board appears clean."
-                return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+                return render_template("index.html", page="erase", msg=msg, error=error)
             
-            print(f"[SMUDGE_ERASE] Detected {len(smudge_contours)} smudge(s)")
-            print(f"[SMUDGE_ERASE] Generated {len(gcode_lines)} G-code lines")
+            print(f"[ERASE] Detected {len(smudge_contours)} smudge(s)")
+            print(f"[ERASE] Generated {len(gcode_lines)} G-code lines")
             
             # Convert G-code lines to waypoints for CV correction
             waypoints = []
@@ -1250,7 +1214,6 @@ def erase_smudges():
                 
                 # Parse G1 commands
                 if line.startswith("G1"):
-                    # Extract X and Y if present
                     x = current_x
                     y = current_y
                     
@@ -1275,32 +1238,43 @@ def erase_smudges():
                     current_x = x
                     current_y = y
                 
-                # Track pen state
-                elif "M280 P0 S0" in line:
+                # Track pen state (eraser down = 0, eraser up = 90)
+                elif "M280 P0 S0" in line or "M280 P1 S0" in line:
                     pen_down = True
-                elif "M280 P0 S90" in line:
+                elif "M280 P0 S90" in line or "M280 P1 S90" in line:
                     pen_down = False
             
-            # Send G-code with CV correction
+            # Send G-code with CV correction enabled
             gcode_str = "\n".join(gcode_lines)
             
             if waypoints:
-                print(f"[SMUDGE_ERASE] Extracted {len(waypoints)} waypoints for CV correction")
+                print(f"[ERASE] Extracted {len(waypoints)} waypoints for CV correction")
+                # Use CV correction for precise erasing (window_size=3 for rapid feedback)
                 _send_with_cv_correction(gcode_str, waypoints, start_pos=current_position, window_size=3)
-                msg = f"Detected {len(smudge_contours)} smudge(s). Generated {len(gcode_lines)} commands with {len(waypoints)} waypoints. Erasing..."
+                msg = f"Detected {len(smudge_contours)} smudge(s). Generated {len(gcode_lines)} commands with {len(waypoints)} CV-corrected waypoints."
             else:
-                # No waypoints (only pen lifts/drops), send directly
-                print("[SMUDGE_ERASE] No waypoints extracted, sending commands directly")
-                bt.send_gcode(gcode_str)
+                # No waypoints (only pen lifts/drops), send directly without correction
+                print("[ERASE] No waypoints extracted, sending commands directly")
+                bt.send_gcode_windowed(gcode_str, window_size=3)
                 msg = f"Detected {len(smudge_contours)} smudge(s). Sent {len(gcode_lines)} commands."
         
         except Exception as e:
             import traceback
             error = f"Failed to detect/erase smudges: {e}"
-            print(f"[SMUDGE_ERASE] ERROR: {traceback.format_exc()}")
-            return render_template("index.html", page="erase_smudges", msg=msg, error=error)
-    
-    return render_template("index.html", page="erase_smudges", msg=msg, error=error)
+            print(f"[ERASE] ERROR: {traceback.format_exc()}")
+            return render_template("index.html", page="erase", msg=msg, error=error)
+
+        return render_template("index.html", page="erase", msg=msg, error=error)
+
+    return render_template("index.html", page="erase", msg=msg, error=error)
+
+
+
+@app.route("/erase_smudges", methods=["GET", "POST"])
+def erase_smudges():
+    """Legacy route - now redirects to /erase for CV-based smudge detection."""
+    return redirect(url_for("erase"))
+
 
 
 @app.route("/draw", methods=["GET", "POST"])
@@ -1322,12 +1296,12 @@ def draw():
 
         if uploaded_file and uploaded_file.filename:
             fname = secure_filename(uploaded_file.filename)
-            img_path = os.path.join("uploads", fname)
+            img_path = os.path.join(UPLOADS_DIR, fname)
             uploaded_file.save(img_path)
             STATE["target_image"] = fname
             try:
                 base = os.path.splitext(fname)[0]
-                gcode_path = os.path.join("uploads", f"{base}.gcode")
+                gcode_path = os.path.join(UPLOADS_DIR, f"{base}.gcode")
                 gcode_path = _convert_image_to_gcode(img_path, gcode_path, canvas_size=(900, 530))
                 ops = load_gcode_file(gcode_path)
                 raw_norm, norm_origin = _ops_to_normalized_wps(ops, return_origin=True)
@@ -1471,7 +1445,7 @@ def test_send():
     """Send G-code directly without pathfinding pipeline (for testing)"""
     _ensure_cv_thread()
     try:
-        gcode_file = request.form.get("gcode_file", "uploads/test_simple_square.gcode")
+        gcode_file = request.form.get("gcode_file", os.path.join(UPLOADS_DIR, "test_simple_square.gcode"))
         
         if not os.path.isfile(gcode_file):
             return {"error": f"File not found: {gcode_file}"}, 404
@@ -1520,5 +1494,16 @@ def _shutdown():
 if __name__ == "__main__":
     try: faulthandler.enable()
     except Exception: pass
+    
+    print("=" * 80)
+    print("Starting doodle_bot server")
+    print("=" * 80)
+    print(f"CV_SOFTWARE_DIR: {CV_SOFTWARE_DIR}")
+    print(f"UPLOADS_DIR: {UPLOADS_DIR}")
+    print(f"PATHFINDING_DIR: {PATHFINDING_DIR}")
+    print(f"CAMERA_SRC: {CAMERA_SRC}")
+    print(f"USE_CV_CORRECTION: {USE_CV_CORRECTION}")
+    print("=" * 80)
+    
     _ensure_cv_thread()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), threaded=True, debug=False)

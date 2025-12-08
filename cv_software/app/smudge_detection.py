@@ -285,6 +285,17 @@ def generate_smudge_erase_gcode(
         frame_bgr, H_img2board, board_width_mm, board_height_mm
     )
     
+    # Print detected smudge locations (centroids)
+    for idx, contour in enumerate(smudge_contours):
+        M = cv2.moments(contour)
+        if M["m00"] > 0:
+            cx = M["m10"] / M["m00"]
+            cy = M["m01"] / M["m00"]
+        else:
+            cx = float(np.mean(contour[:, 0]))
+            cy = float(np.mean(contour[:, 1]))
+        print(f"Detected smudge {idx+1} at ({cx:.1f}, {cy:.1f}) mm")
+    
     # Generate erase path
     gcode = path_gen.generate_erase_path(smudge_contours, current_position)
     
