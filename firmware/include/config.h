@@ -8,7 +8,7 @@
 #define DEBUG_SERVO
 
 #define WHEEL_DIAMETER          (46.27f)
-#define WHEELBASE               (151f)
+#define WHEELBASE               (151.0f)
 
 #define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
 #define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence
