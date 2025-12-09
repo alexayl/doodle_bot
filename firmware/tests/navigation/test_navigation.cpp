@@ -23,7 +23,7 @@ K_THREAD_STACK_DEFINE(nav_stack, STACK_SIZE);
 K_THREAD_STACK_DEFINE(state_stack, STACK_SIZE);
 
 static struct k_thread comms_thread_data;
-static struct k_thread nav_thread_data;
+static struct k_thread motion_planner_thread_data;
 static struct k_thread state_thread_data;
 
 K_TIMER_DEFINE(motor_control_timer, MotionPlanner::motor_control_handler, NULL);
@@ -189,8 +189,8 @@ ZTEST(navigation_thread, test_large_movements) {
 
 static void *navigation_setup(void) {
     // Start the navigation thread once for all tests
-    k_thread_create(&nav_thread_data, nav_stack, STACK_SIZE,
-                    nav_thread, &gcode_cmd_msgq, &nav_cmd_msgq, &step_cmd_msgq,
+    k_thread_create(&motion_planner_thread_data, nav_stack, STACK_SIZE,
+                    motion_planner_thread, &gcode_cmd_msgq, &nav_cmd_msgq, &step_cmd_msgq,
                     NAV_PRIORITY, 0, K_NO_WAIT);
     return NULL;
 }

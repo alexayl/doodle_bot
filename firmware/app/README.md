@@ -9,7 +9,7 @@ The main application firmware for the DoodleBot project. This firmware implement
 The application uses a threaded architecture with three main threads:
 
 - **Communications Thread** (`comms_thread`) - Handles Bluetooth Low Energy (BLE) communication via Nordic UART Service (NUS)
-- **Navigation Thread** (`nav_thread`) - Processes movement instructions and controls servo motors
+- **Navigation Thread** (`motion_planner_thread`) - Processes movement instructions and controls servo motors
 - **State Management Thread** (`state_thread`) - Manages overall system state and coordination
 
 Communication between threads is handled through Zephyr message queues, specifically the `gcode_cmd_msgq` for navigation instructions.

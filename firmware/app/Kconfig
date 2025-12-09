@@ -68,10 +68,9 @@ config PWM_BUZZER_DRIVER_TEST
 
 config STEPPER_TEST
 	bool "Build stepper test instead of main application"
-	select DOODLE_STEPPER
+	select DOODLE_A4988_STEPPER
 	help
-	  When enabled, builds the stepper test application instead of the main
-	  doodle bot application. This allows testing the stepper driver in isolation.
+	  Builds stepper test application for isolated driver testing.
 
 module = APP
 module-str = APP

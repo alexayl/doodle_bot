@@ -13,33 +13,48 @@ from packetlib import BLEPacketHandler
 
 DEVICE_NAME = "BOO"
 
-default_commands = [
-    b"G1 X100 Y0\n",
-    b"G1 X0 Y100\n", 
-    b"G1 X-100 Y0\n",
-    b"G1 X0 Y-100\n",
-    # b"G1 X100 Y0\n",
-    # b"G1 X0 Y100\n", 
-    # b"G1 X-100 Y0\n",
-    # b"G1 X0 Y-100\n",
-    # b"G1 X100 Y0\n",
-    # b"G1 X0 Y100\n", 
-    # b"G1 X-100 Y0\n",
-    # b"G1 X0 Y-100\n",
-    # b"G1 X100 Y0\n",
-    # b"G1 X0 Y100\n", 
-    # b"G1 X-100 Y0\n",
-    # b"G1 X0 Y-100\n",
-]
-
-servo_test_commands = [
+# this works
+servo_alternate_commands = [
     b"M280 P0 S0\n",
-    b"M280 P0 S45\n",
-    b"M280 P0 S90\n",
-    b"M280 P0 S135\n",
+    b"M280 P0 S40\n",
+    b"M280 P0 S0\n",
+    b"M280 P0 S40\n",
 ]
 
-commands_to_send = servo_test_commands
+default_commands = [
+    b"M280 P0 S40\n",
+    b"G1 X100 Y0\n",
+    b"M280 P0 S0\n",
+    b"G1 X0 Y100\n",
+    b"M280 P0 S40\n",
+    b"G1 X-100 Y0\n",
+    b"M280 P0 S0\n",
+    # b"G1 X0 Y-100\n",
+    # b"M280 P0 S40\n",
+]
+
+draw_a_square_commands = [
+    b"M280 P0 S40\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"G1 X50 Y0\n",
+    b"G1 X0 Y50\n",
+    b"G1 X-50 Y0\n",
+    b"G1 X0 Y-50\n",
+
+    b"M280 P0 S0\n",
+
+]
+commands_to_send = draw_a_square_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """

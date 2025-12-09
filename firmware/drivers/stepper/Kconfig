@@ -1,10 +1,12 @@
-# Copyright (c) 2025 Doodle Bot Project
 # SPDX-License-Identifier: Apache-2.0
 
-config DOODLE_STEPPER
-	bool "Doodle Bot Stepper Motor Driver"
-	depends on GPIO
+config DOODLE_A4988_STEPPER
+	bool "A4988 Stepper Motor Driver"
+	default y
+	depends on DT_HAS_DOODLE_A4988_STEPPER_ENABLED
+	select STEPPER
+	select STEP_DIR_STEPPER
+	select STEP_DIR_STEPPER_COUNTER_TIMING if $(dt_node_has_prop,$(dt_nodelabel_path,stepper_left),counter)
 	help
-	  Enable stepper motor driver for A4988/DRV8825 modules.
-	  Supports velocity control with automatic degrees/s to microstep conversion.
-	  Uses Zephyr timers for precise step pulse generation.
+	  A4988 stepper driver using Zephyr's step_dir framework.
+	  Uses GPIO toggling for step pulses (no PWM interference).

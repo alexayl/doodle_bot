@@ -11,9 +11,9 @@ project(doodle_bot)
 file(GLOB DOODLE_BOT_SOURCES "src/*.c" "src/*.cpp")
 target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 
-# Include all driver sources for main application
+# Include driver sources for main application
 target_sources(app PRIVATE 
-    ${CMAKE_SOURCE_DIR}/../drivers/stepper/stepper.c
+    ${CMAKE_SOURCE_DIR}/../drivers/stepper/a4988.c
     ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
     ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
     ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
@@ -27,6 +27,7 @@ target_include_directories(app PRIVATE
     ${CMAKE_SOURCE_DIR}/../drivers/stepper
     ${CMAKE_SOURCE_DIR}/../drivers/buzzer
     ${CMAKE_SOURCE_DIR}/../drivers/led
+    ${ZEPHYR_BASE}/drivers/stepper  # For step_dir_stepper_common.h
 )
 
 # Add specific flags for x86 platform to handle floating point
