@@ -24,6 +24,7 @@ MotionExecutor::MotionExecutor() : servo_marker_("servom"), servo_eraser_("servo
     stepper_right_.initialize();
     servo_marker_.initialize();
     servo_eraser_.initialize();
+    led_.initialize();
 }
 
 void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
@@ -46,13 +47,6 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
             printk("[EXEC] M280 P1 S%d - Begin eraser servo move\n", cmd.servo().angle);
             #endif
             executeServoCommand(cmd);
-            break;
-        case Device::ConfigAck:
-            #ifdef DEBUG_MOTION_EXECUTION
-            printk("[EXEC] Config command completed\n");
-            #endif
-            // Config commands complete immediately - no hardware action needed
-            // ACK will be sent by the thread's ackTracker
             break;
         default:
             printk("MotionExecutor: Unknown device %d\n", static_cast<int>(cmd.device()));
@@ -90,6 +84,14 @@ void MotionExecutor::executeServoCommand(const ExecuteCommand& cmd) {
     
     // Wait for servo to physically reach position
     k_sleep(K_MSEC(SERVO_SETTLE_TIME_MS));
+}
+
+void MotionExecutor::executeLedCommand(const ExecuteCommand& cmd) {
+    if (cmd.led().state) {
+        led_.turnOn();
+    } else {
+        led_.turnOff();
+    }
 }
 
 void MotionExecutor::reset() {

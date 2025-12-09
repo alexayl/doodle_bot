@@ -16,7 +16,8 @@ enum Device : uint8_t {
     Steppers,
     MarkerServo,
     EraserServo,
-    ConfigAck  // Immediate ACK for config commands (M503, M504)
+    ConfigAck,  // Immediate ACK for config commands (M503, M504)
+    StatusLed
 };
 
 /**
@@ -38,8 +39,13 @@ public:
         uint8_t angle;
     };
 
+    struct LedData {
+        bool state;  // true = on, false = off
+    };
+
     // Default constructor
-    ExecuteCommand() : device_(Steppers), packet_id_(0), steppers_{0.0f, 0.0f}, servo_{0, 0} {}
+    ExecuteCommand() : device_(Steppers), packet_id_(0), steppers_{0.0f, 0.0f}, servo_{0, 0}, led_{false} {}
+
 
     /**
      * @brief Set the command data
@@ -68,6 +74,9 @@ public:
 
             case Device::ConfigAck:
                 // No data to store - just needs packet_id for ACK
+
+            case Device::StatusLed:
+                led_ = *static_cast<const LedData*>(cmd);
                 break;
 
             default:
@@ -80,6 +89,7 @@ public:
     uint8_t packet_id() const { return packet_id_; }
     const StepperData& steppers() const { return steppers_; }
     const ServoData& servo() const { return servo_; }
+    const LedData& led() const { return led_; }
 
     void print() const {
         if (device_ == Steppers) {
@@ -87,6 +97,10 @@ public:
                    packet_id_, (double)steppers_.left_velocity, (double)steppers_.right_velocity);
         } else if (device_ == ConfigAck) {
             printk("ExecuteCommand[CONFIG]: packet=%d\n", packet_id_);
+
+        } else if (device_ == StatusLed) {
+            printk("ExecuteCommand[LED]: packet=%d, state=%d\n",
+                   packet_id_, led_.state);
         } else {
             printk("ExecuteCommand[SERVO]: packet=%d, servo_id=%d, angle=%d\n",
                    packet_id_, servo_.servo_id, servo_.angle);
@@ -98,6 +112,7 @@ private:
     uint8_t packet_id_;
     StepperData steppers_;
     ServoData servo_;
+    LedData led_;
 };
 
 
@@ -138,10 +153,12 @@ private:
     static Stepper stepper_right_;
     Servo servo_marker_;
     Servo servo_eraser_;
+    Led led_;
 
     // Helper methods
     void executeStepperCommand(const ExecuteCommand& cmd);
     void executeServoCommand(const ExecuteCommand& cmd);
+    void executeLedCommand(const ExecuteCommand& cmd);
 };
 
 

@@ -219,6 +219,12 @@ void MotionPlanner::consumeLocomotion() {
         printk("ERROR: Interpolation not successful.\n");
     }
 
+    // LED on before stepper motion
+    ExecuteCommand::LedData led_on = {true};
+    ExecuteCommand led_on_cmd;
+    led_on_cmd.set(Device::StatusLed, &led_on, current_packet_id_);
+    addToOutput(led_on_cmd);
+
     // turn wheel distances into wheel velocities
     while (k_msgq_num_used_get(&nav_queue_) > 0) {
 
@@ -231,6 +237,12 @@ void MotionPlanner::consumeLocomotion() {
             printk("ERROR: Discretization not successful.\n");
         }
     }
+
+    // LED off after stepper motion
+    ExecuteCommand::LedData led_off = {false};
+    ExecuteCommand led_off_cmd;
+    led_off_cmd.set(Device::StatusLed, &led_off, current_packet_id_);
+    addToOutput(led_off_cmd);
 }
 
 
