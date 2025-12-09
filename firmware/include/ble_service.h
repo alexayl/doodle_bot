@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/services/nus.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/kernel.h>
@@ -66,6 +67,16 @@ public:
     static BleService* instance;
 
 	/**
+	 * @brief Starts BLE advertising to allow new connections.
+	 */
+	void startAdvertising();
+
+    // Static callbacks for connection events (public for BT_CONN_CB_DEFINE macro)
+    static void connected(struct bt_conn *conn, uint8_t err);
+    static void disconnected(struct bt_conn *conn, uint8_t reason);
+    static BleService* instance;
+
+	/**
 	 * @brief Initialize the ACK work queue (call once at startup).
 	 */
 	static void initAckQueue();
@@ -85,6 +96,8 @@ private:
     static const struct bt_data ad[];
     static const struct bt_data sd[];
     static struct bt_nus_cb nus_listener;
+
+    // Static callbacks for NUS service
 
     // Static callbacks for NUS service
     static void notif_enabled(bool enabled, void *ctx);
