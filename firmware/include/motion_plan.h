@@ -26,7 +26,7 @@ class MotionPlanner {
 public:
     /* TYPES */
     struct Output {
-        ExecuteCommand cmds[ELEMENTS_PER_ARRAY];
+        ExecuteCommand cmds[MOTION_PLAN_OUTPUT_SIZE];
         size_t count;
         
         Output() : count(0) {}
@@ -69,7 +69,7 @@ private:
 
     void clearOutput() { output_.count = 0; }
     void addToOutput(const ExecuteCommand& cmd) { 
-        if (output_.count < ELEMENTS_PER_ARRAY) {
+        if (output_.count < MOTION_PLAN_OUTPUT_SIZE) {
             output_.cmds[output_.count++] = cmd; 
         }
     }

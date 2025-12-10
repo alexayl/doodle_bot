@@ -44,12 +44,12 @@
 
 #ifdef DOO
 #define WHEEL_DIAMETER          (59.4f)
-#define WHEELBASE               (177.0f)  // TODO: calibrate - see instructions above
+#define WHEELBASE               (183.0f)  // TODO: calibrate - see instructions above
 #endif
 
 
-#define STEPPER_CTRL_FREQ       (5.0f)     // control frequency (Hz)
-#define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence
+#define STEPPER_CTRL_FREQ       (15.0f)    // control frequency (Hz) - higher = finer control
+#define STEPPER_CTRL_PERIOD     (1.0f / STEPPER_CTRL_FREQ) // seconds per occurrence (100ms)
 
 #define WHEEL_RADIUS            (WHEEL_DIAMETER / 2)
 #define DOODLEBOT_RADIUS        (WHEELBASE / 2)   // distance from center of doodlebot to wheel
@@ -57,3 +57,4 @@
 
 #define MESSAGES_PER_QUEUE 200
 #define ELEMENTS_PER_ARRAY 50
+#define MOTION_PLAN_OUTPUT_SIZE 100

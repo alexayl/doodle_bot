@@ -7,15 +7,14 @@
 Stepper MotionExecutor::stepper_left_(STEPPER_LEFT);
 Stepper MotionExecutor::stepper_right_(STEPPER_RIGHT);
 
-// Stepper motion timer - stops motors after STEPPER_CTRL_PERIOD
-K_SEM_DEFINE(stepper_motion_complete, 0, 1);
+// Stepper motion timer - signals control period complete (does NOT stop motors)
+K_SEM_DEFINE(stepper_period_complete, 0, 1);
 
 static void stepper_timer_expiry(struct k_timer *timer)
 {
     ARG_UNUSED(timer);
-    MotionExecutor::stepperLeft().setVelocity(0);
-    MotionExecutor::stepperRight().setVelocity(0);
-    k_sem_give(&stepper_motion_complete);
+    // Don't stop motors here - let thread decide based on next command
+    k_sem_give(&stepper_period_complete);
 }
 
 K_TIMER_DEFINE(stepper_motion_timer, stepper_timer_expiry, NULL);
@@ -58,15 +57,20 @@ void MotionExecutor::executeStepperCommand(const ExecuteCommand& cmd) {
     stepper_left_.setVelocity(cmd.steppers().left_velocity);
     stepper_right_.setVelocity(cmd.steppers().right_velocity);
     
-    // Start timer to stop motors after control period
+    // Start timer for control period
     k_timer_start(&stepper_motion_timer, K_MSEC((int)(STEPPER_CTRL_PERIOD * 1000)), K_NO_WAIT);
     
-    // Wait for timer callback to complete motion
-    k_sem_take(&stepper_motion_complete, K_FOREVER);
+    // Wait for control period to complete (motors keep running)
+    k_sem_take(&stepper_period_complete, K_FOREVER);
+}
+
+void MotionExecutor::stopSteppers() {
+    stepper_left_.setVelocity(0);
+    stepper_right_.setVelocity(0);
 }
 
 // Time for servo to reach position (ms) - typical hobby servo is ~200ms for full sweep
-#define SERVO_SETTLE_TIME_MS 200
+#define SERVO_SETTLE_TIME_MS 300
 
 void MotionExecutor::executeServoCommand(const ExecuteCommand& cmd) {
     const auto& servo = cmd.servo();
@@ -100,12 +104,42 @@ void motion_execute_thread(void *msgq, void *, void *) {
     PacketAckTracker ackTracker;
 
     ExecuteCommand cmd;
+    bool steppers_running = false;
+    
     while (1) {
-        if (k_msgq_get(queue, &cmd, K_MSEC(PACKET_ACK_TIMEOUT_MS)) == -EAGAIN) {
+        int ret = k_msgq_get(queue, &cmd, K_MSEC(PACKET_ACK_TIMEOUT_MS));
+        
+        if (ret == -EAGAIN) {
+            // Timeout - no new commands
+            if (steppers_running) {
+                executor.stopSteppers();
+                steppers_running = false;
+            }
             ackTracker.onTimeout();
             continue;
         }
+        
         ackTracker.onCommand(cmd.packet_id());
+        
+        // If switching from steppers to servo, stop steppers first
+        if (steppers_running && cmd.device() != Device::Steppers) {
+            executor.stopSteppers();
+            steppers_running = false;
+        }
+        
         executor.consumeCommands(cmd);
+        
+        // Track if steppers are now running
+        if (cmd.device() == Device::Steppers) {
+            steppers_running = true;
+            
+            // Check if more stepper commands are pending
+            if (k_msgq_num_used_get(queue) == 0) {
+                // No more commands - stop steppers
+                executor.stopSteppers();
+                steppers_running = false;
+            }
+            // else: more commands pending, keep steppers running at current velocity
+        }
     }
 }

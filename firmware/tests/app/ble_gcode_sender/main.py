@@ -40,18 +40,19 @@ draw_a_square_commands = [
     b"G1 X50 Y0\n",
 
     # set down marker
-    b"M280 P0 S40\n",
+    b"M280 P0 S50\n",
 
     # draw a square
-    b"G1 X50 Y0\n",
-    b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
+    b"G1 X100 Y0\n",
+    b"G1 X0 Y100\n",
+    b"G1 X-100 Y0\n",
+    b"G1 X0 Y-100\n",
 
-    # b"G1 X50 Y0\n",
-    # b"G1 X0 Y50\n",
-    # b"G1 X-50 Y0\n",
-    # b"G1 X0 Y-50\n",
+    # draw a square
+    b"G1 X100 Y0\n",
+    b"G1 X0 Y100\n",
+    b"G1 X-100 Y0\n",
+    b"G1 X0 Y-100\n",
 
     # # b"G1 X50 Y0\n",
     # # b"G1 X0 Y50\n",

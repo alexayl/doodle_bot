@@ -10,6 +10,24 @@
 
 
 // -------------------
+// S-Curve Helpers
+// -------------------
+
+/**
+ * @brief S-curve velocity profile using half-cosine
+ * 
+ * Provides smooth acceleration with zero jerk at start/end.
+ * Input: t in [0, 1], Output: scale in [0, 1]
+ * 
+ * Profile shape: starts slow, accelerates in middle, ends slow
+ * Integral equals 0.5 (same as linear ramp), so timing math unchanged.
+ */
+static inline float s_curve(float t) {
+    return (1.0f - cosf(PI * t)) * 0.5f;
+}
+
+
+// -------------------
 // MotionPlanner Class
 // -------------------
 
@@ -111,12 +129,14 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
         for (int i = 0; i < total_steps; i++) {
             float velocity_scale;
             if (i < RAMP_CYCLES) {
-                // Ramp up: 1/3, 2/3, 3/3
-                velocity_scale = (float)(i + 1) / (float)RAMP_CYCLES;
+                // S-curve ramp up: smooth acceleration
+                float t = (float)(i + 1) / (float)RAMP_CYCLES;
+                velocity_scale = s_curve(t);
             } else {
-                // Ramp down: 2/3, 1/3
+                // S-curve ramp down: smooth deceleration
                 int ramp_down_idx = i - RAMP_CYCLES;
-                velocity_scale = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
+                float t = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
+                velocity_scale = s_curve(t);
             }
             
             float current_v_left = max_step_v_left * velocity_scale;
@@ -143,15 +163,17 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
         for (int i = 0; i < total_steps; i++) {
             float velocity_scale;
             if (i < RAMP_CYCLES) {
-                // Ramp up: 1/3, 2/3, 3/3
-                velocity_scale = (float)(i + 1) / (float)RAMP_CYCLES;
+                // S-curve ramp up: smooth acceleration
+                float t = (float)(i + 1) / (float)RAMP_CYCLES;
+                velocity_scale = s_curve(t);
             } else if (i < RAMP_CYCLES + cruise_steps) {
                 // Cruise: full speed
                 velocity_scale = 1.0f;
             } else {
-                // Ramp down: 2/3, 1/3
+                // S-curve ramp down: smooth deceleration
                 int ramp_down_idx = i - RAMP_CYCLES - cruise_steps;
-                velocity_scale = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
+                float t = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
+                velocity_scale = s_curve(t);
             }
             
             float current_v_left = max_step_v_left * velocity_scale;

@@ -116,6 +116,11 @@ public:
      */
     void reset();
 
+    /**
+     * @brief Stop stepper motors (called when no more stepper commands pending)
+     */
+    void stopSteppers();
+
     // Static accessors for hardware
     static Stepper& stepperLeft() { return stepper_left_; }
     static Stepper& stepperRight() { return stepper_right_; }
