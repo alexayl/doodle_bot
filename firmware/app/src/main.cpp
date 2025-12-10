@@ -17,11 +17,11 @@ K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), MESSAGES_PER_QUEUE, alig
 
 /* THREAD DEFINITION AND MANAGEMENT */
 
-#define STACK_SIZE      1024*8
+#define STACK_SIZE 1024*8
 
 #define MOTION_EXECUTE_PRIORITY  0  // Highest priority for real-time motion
 #define STATE_PRIORITY           1
-#define MOTION_PLAN_PRIORITY             2
+#define MOTION_PLAN_PRIORITY     2
 #define COMMS_PRIORITY           3
 
 K_THREAD_STACK_DEFINE(comms_thread_stack, STACK_SIZE);

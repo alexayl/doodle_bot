@@ -48,15 +48,15 @@ draw_a_square_commands = [
     b"G1 X-50 Y0\n",
     b"G1 X0 Y-50\n",
 
-    b"G1 X50 Y0\n",
-    b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
+    # b"G1 X50 Y0\n",
+    # b"G1 X0 Y50\n",
+    # b"G1 X-50 Y0\n",
+    # b"G1 X0 Y-50\n",
 
-    b"G1 X50 Y0\n",
-    b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
+    # # b"G1 X50 Y0\n",
+    # # b"G1 X0 Y50\n",
+    # # b"G1 X-50 Y0\n",
+    # # b"G1 X0 Y-50\n",
 
     # lift up marker
     b"M280 P0 S0\n",

@@ -70,50 +70,107 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
     float v_left = d_left * STEPPER_CTRL_FREQ;   // mm/s
     float v_right = d_right * STEPPER_CTRL_FREQ; // mm/s
 
-    // rate limiting subsequent steps to prevent high velocity movement
-    do {
-        float current_v_left, current_v_right;
-        
-        if (fabsf(v_left) > MAX_LINEAR_VELOCITY) {
-            if (v_left > 0) {
-                v_left -= MAX_LINEAR_VELOCITY;
-                current_v_left = MAX_LINEAR_VELOCITY;
-            } else {
-                v_left += MAX_LINEAR_VELOCITY;
-                current_v_left = -MAX_LINEAR_VELOCITY;
-            }
-        } else {
-            current_v_left = v_left;
-            v_left = 0.0f;
-        }
+    // Calculate number of steps needed based on the wheel with the higher velocity
+    float max_v = fmaxf(fabsf(v_left), fabsf(v_right));
+    if (max_v < 0.01f) {
+        return 0;  // No motion needed
+    }
 
-        if (fabsf(v_right) > MAX_LINEAR_VELOCITY) {
-            if (v_right > 0) {
-                v_right -= MAX_LINEAR_VELOCITY;
-                current_v_right = MAX_LINEAR_VELOCITY;
+    // Velocity smoothing: ramp up over RAMP_CYCLES, cruise, then ramp down over RAMP_CYCLES
+    const int RAMP_CYCLES = 6;
+    
+    // Calculate equivalent cruise steps from ramp phases
+    // Ramp up: scales [1/RAMP, 2/RAMP, ..., RAMP/RAMP] = sum of 1 to RAMP divided by RAMP
+    // Ramp down: scales [(RAMP-1)/RAMP, ..., 1/RAMP] = sum of 1 to RAMP-1 divided by RAMP
+    float ramp_up_equivalent = (float)(RAMP_CYCLES + 1) / 2.0f;      // (1+2+..+6)/6 = 3.5
+    float ramp_down_equivalent = (float)(RAMP_CYCLES - 1) / 2.0f;    // (5+4+..+1)/6 = 2.5
+    float total_ramp_equivalent = ramp_up_equivalent + ramp_down_equivalent;  // 3.0 cruise-equivalent steps
+    
+    // Total equivalent cruise steps needed
+    float total_equivalent_steps = max_v / MAX_LINEAR_VELOCITY;
+    
+    // Calculate cruise steps (can be 0 or negative if motion is too short for full ramps)
+    int cruise_steps = (int)ceilf(total_equivalent_steps - total_ramp_equivalent);
+    if (cruise_steps < 0) {
+        cruise_steps = 0;
+    }
+    
+    // Total actual steps
+    int total_steps = RAMP_CYCLES + cruise_steps + (RAMP_CYCLES - 1);  // ramp up + cruise + ramp down
+    
+    // For very short motions, use triangular profile (just ramp up then down)
+    if (total_equivalent_steps < total_ramp_equivalent) {
+        // Scale down the velocity to fit the motion
+        float scale_factor = total_equivalent_steps / total_ramp_equivalent;
+        total_steps = RAMP_CYCLES + (RAMP_CYCLES - 1);  // No cruise phase
+        
+        // Recalculate velocities scaled down
+        float max_step_v_left = (v_left / total_equivalent_steps) * scale_factor;
+        float max_step_v_right = (v_right / total_equivalent_steps) * scale_factor;
+        
+        for (int i = 0; i < total_steps; i++) {
+            float velocity_scale;
+            if (i < RAMP_CYCLES) {
+                // Ramp up: 1/3, 2/3, 3/3
+                velocity_scale = (float)(i + 1) / (float)RAMP_CYCLES;
             } else {
-                v_right += MAX_LINEAR_VELOCITY;
-                current_v_right = -MAX_LINEAR_VELOCITY;
+                // Ramp down: 2/3, 1/3
+                int ramp_down_idx = i - RAMP_CYCLES;
+                velocity_scale = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
             }
-        } else {
-            current_v_right = v_right;
-            v_right = 0.0f;
+            
+            float current_v_left = max_step_v_left * velocity_scale;
+            float current_v_right = max_step_v_right * velocity_scale;
+            
+            // step 4: convert linear velocity to angular velocity
+            float omega_left_rad = current_v_left / WHEEL_RADIUS;
+            float omega_right_rad = current_v_right / WHEEL_RADIUS;
+            
+            // step 5: create stepper command
+            ExecuteCommand::StepperData stepper_data;
+            stepper_data.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
+            stepper_data.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+            
+            ExecuteCommand execute_cmd;
+            execute_cmd.set(Steppers, &stepper_data, current_packet_id_);
+            addToOutput(execute_cmd);
         }
+    } else {
+        // Normal trapezoidal profile with cruise phase
+        float max_step_v_left = v_left / (total_ramp_equivalent + (float)cruise_steps);
+        float max_step_v_right = v_right / (total_ramp_equivalent + (float)cruise_steps);
         
-        // step 4: convert linear velocity to angular velocity
-        float omega_left_rad = current_v_left / WHEEL_RADIUS;
-        float omega_right_rad = current_v_right / WHEEL_RADIUS;
-        
-        // step 5: create stepper command
-        ExecuteCommand::StepperData stepper_data;
-        stepper_data.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
-        stepper_data.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
-        
-        ExecuteCommand execute_cmd;
-        execute_cmd.set(Steppers, &stepper_data, current_packet_id_);
-        addToOutput(execute_cmd);
-
-    } while (fabsf(v_left) > 0.01f || fabsf(v_right) > 0.01f);
+        for (int i = 0; i < total_steps; i++) {
+            float velocity_scale;
+            if (i < RAMP_CYCLES) {
+                // Ramp up: 1/3, 2/3, 3/3
+                velocity_scale = (float)(i + 1) / (float)RAMP_CYCLES;
+            } else if (i < RAMP_CYCLES + cruise_steps) {
+                // Cruise: full speed
+                velocity_scale = 1.0f;
+            } else {
+                // Ramp down: 2/3, 1/3
+                int ramp_down_idx = i - RAMP_CYCLES - cruise_steps;
+                velocity_scale = (float)(RAMP_CYCLES - 1 - ramp_down_idx) / (float)RAMP_CYCLES;
+            }
+            
+            float current_v_left = max_step_v_left * velocity_scale;
+            float current_v_right = max_step_v_right * velocity_scale;
+            
+            // step 4: convert linear velocity to angular velocity
+            float omega_left_rad = current_v_left / WHEEL_RADIUS;
+            float omega_right_rad = current_v_right / WHEEL_RADIUS;
+            
+            // step 5: create stepper command
+            ExecuteCommand::StepperData stepper_data;
+            stepper_data.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
+            stepper_data.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+            
+            ExecuteCommand execute_cmd;
+            execute_cmd.set(Steppers, &stepper_data, current_packet_id_);
+            addToOutput(execute_cmd);
+        }
+    }
 
     return 0;
 }
