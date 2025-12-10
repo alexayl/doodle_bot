@@ -24,6 +24,7 @@ MotionExecutor::MotionExecutor() : servo_marker_("servom"), servo_eraser_("servo
     stepper_right_.initialize();
     servo_marker_.initialize();
     servo_eraser_.initialize();
+    led_.initialize();
 }
 
 void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
@@ -47,12 +48,11 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
             #endif
             executeServoCommand(cmd);
             break;
-        case Device::ConfigAck:
+        case Device::StatusLed:
             #ifdef DEBUG_MOTION_EXECUTION
-            printk("[EXEC] Config command completed\n");
+            printk("[EXEC] LED state=%d\n", cmd.led().state);
             #endif
-            // Config commands complete immediately - no hardware action needed
-            // ACK will be sent by the thread's ackTracker
+            executeLedCommand(cmd);
             break;
         default:
             printk("MotionExecutor: Unknown device %d\n", static_cast<int>(cmd.device()));
@@ -90,6 +90,11 @@ void MotionExecutor::executeServoCommand(const ExecuteCommand& cmd) {
     
     // Wait for servo to physically reach position
     k_sleep(K_MSEC(SERVO_SETTLE_TIME_MS));
+}
+
+void MotionExecutor::executeLedCommand(const ExecuteCommand& cmd) {
+    // Use led_.set() to match test-esp-led behavior (calls led_driver_set)
+    led_.set(cmd.led().state ? 1 : 0);
 }
 
 void MotionExecutor::reset() {
