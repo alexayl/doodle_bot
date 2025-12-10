@@ -19,9 +19,10 @@ K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), MESSAGES_PER_QUEUE, alig
 
 #define STACK_SIZE      1024*8
 
-#define COMMS_PRIORITY  2
-#define NAV_PRIORITY    1
-#define STATE_PRIORITY  0
+#define MOTION_EXECUTE_PRIORITY  0  // Highest priority for real-time motion
+#define STATE_PRIORITY           1
+#define MOTION_PLAN_PRIORITY             2
+#define COMMS_PRIORITY           3
 
 K_THREAD_STACK_DEFINE(comms_thread_stack, STACK_SIZE);
 K_THREAD_STACK_DEFINE(motion_plan_thread_stack, STACK_SIZE);
@@ -61,11 +62,11 @@ int main(void) {
 
     k_thread_create(&motion_plan_thread_data, motion_plan_thread_stack, STACK_SIZE,
                     motion_plan_thread, &gcode_cmd_msgq, &execute_cmd_msgq, NULL,
-                    NAV_PRIORITY, 0, K_NO_WAIT);
+                    MOTION_PLAN_PRIORITY, 0, K_NO_WAIT);
     
     k_thread_create(&motion_execute_thread_data, motion_execute_thread_stack, STACK_SIZE,
                     motion_execute_thread, &execute_cmd_msgq, NULL, NULL,
-                    NAV_PRIORITY, 0, K_NO_WAIT);
+                    MOTION_EXECUTE_PRIORITY, 0, K_NO_WAIT);
 
 
     k_thread_create(&state_thread_data, state_thread_stack, STACK_SIZE,

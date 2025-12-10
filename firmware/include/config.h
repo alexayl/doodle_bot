@@ -23,14 +23,22 @@
 // -------------------
 // PHYSICAL PARAMETERS
 // -------------------
+
+/*
+    - angle too wide        ->  wheelbase too narrow
+    - angle too narrow      ->  wheelbase too wide
+    - square extends beyond ->  wheelbase too wide
+    - square not completed  ->  wheelbase too narrow
+*/
+
 #ifdef BOO
 #define WHEEL_DIAMETER          (46.27f)
-#define WHEELBASE               (177.0f)
+#define WHEELBASE               (151.0f)
 #endif
 
 #ifdef DOO
 #define WHEEL_DIAMETER          (59.4f)
-#define WHEELBASE               (151.0f)
+#define WHEELBASE               (176.0f) // too narrow
 #endif
 
 
