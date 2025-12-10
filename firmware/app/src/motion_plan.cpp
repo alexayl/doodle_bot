@@ -38,14 +38,14 @@ int MotionPlanner::interpolate(int x_delta, int y_delta) {
     // update current heading state
     theta_current_ = theta_prime;
 
-    // turn
-    if (fabsf(theta_delta) > 0.01f) {
+    // turn (threshold: ~0.06 degrees)
+    if (fabsf(theta_delta) > 0.001f) {
         NavCommand turn_command = {0.0f, theta_delta};
         k_msgq_put(&nav_queue_, &turn_command, K_FOREVER);
     }
     
-    // forward movement
-    if (r_delta > 0.01f) { 
+    // forward movement (threshold: 0.1mm)
+    if (r_delta > 0.1f) { 
         NavCommand forward_command = {r_delta, 0.0f};
         k_msgq_put(&nav_queue_, &forward_command, K_FOREVER);
     }
@@ -128,8 +128,8 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
             
             // step 5: create stepper command
             ExecuteCommand::StepperData stepper_data;
-            stepper_data.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
-            stepper_data.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+            stepper_data.left_velocity = RAD_TO_DEG(omega_left_rad);
+            stepper_data.right_velocity = RAD_TO_DEG(omega_right_rad);
             
             ExecuteCommand execute_cmd;
             execute_cmd.set(Steppers, &stepper_data, current_packet_id_);
@@ -163,8 +163,8 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
             
             // step 5: create stepper command
             ExecuteCommand::StepperData stepper_data;
-            stepper_data.left_velocity = (int16_t)RAD_TO_DEG(omega_left_rad);
-            stepper_data.right_velocity = (int16_t)RAD_TO_DEG(omega_right_rad);
+            stepper_data.left_velocity = RAD_TO_DEG(omega_left_rad);
+            stepper_data.right_velocity = RAD_TO_DEG(omega_right_rad);
             
             ExecuteCommand execute_cmd;
             execute_cmd.set(Steppers, &stepper_data, current_packet_id_);

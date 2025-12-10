@@ -28,8 +28,8 @@ class ExecuteCommand {
 public:
     // Data structures
     struct StepperData {
-        int16_t left_velocity;   // degrees/second
-        int16_t right_velocity;  // degrees/second
+        float left_velocity;   // degrees/second
+        float right_velocity;  // degrees/second
     };
 
     struct ServoData {
@@ -38,7 +38,7 @@ public:
     };
 
     // Default constructor
-    ExecuteCommand() : device_(Steppers), packet_id_(0), steppers_{0, 0}, servo_{0, 0} {}
+    ExecuteCommand() : device_(Steppers), packet_id_(0), steppers_{0.0f, 0.0f}, servo_{0, 0} {}
 
     /**
      * @brief Set the command data
@@ -78,8 +78,8 @@ public:
 
     void print() const {
         if (device_ == Steppers) {
-            printk("ExecuteCommand[STEPPER]: packet=%d, left=%d, right=%d\n",
-                   packet_id_, steppers_.left_velocity, steppers_.right_velocity);
+            printk("ExecuteCommand[STEPPER]: packet=%d, left=%.2f, right=%.2f\n",
+                   packet_id_, (double)steppers_.left_velocity, (double)steppers_.right_velocity);
         } else {
             printk("ExecuteCommand[SERVO]: packet=%d, servo_id=%d, angle=%d\n",
                    packet_id_, servo_.servo_id, servo_.angle);

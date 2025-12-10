@@ -7,6 +7,19 @@
 Stepper MotionExecutor::stepper_left_(STEPPER_LEFT);
 Stepper MotionExecutor::stepper_right_(STEPPER_RIGHT);
 
+// Stepper motion timer - stops motors after STEPPER_CTRL_PERIOD
+K_SEM_DEFINE(stepper_motion_complete, 0, 1);
+
+static void stepper_timer_expiry(struct k_timer *timer)
+{
+    ARG_UNUSED(timer);
+    MotionExecutor::stepperLeft().setVelocity(0);
+    MotionExecutor::stepperRight().setVelocity(0);
+    k_sem_give(&stepper_motion_complete);
+}
+
+K_TIMER_DEFINE(stepper_motion_timer, stepper_timer_expiry, NULL);
+
 MotionExecutor::MotionExecutor() : servo_marker_("servom"), servo_eraser_("servoe") {
     stepper_left_.initialize();
     stepper_right_.initialize();
@@ -18,7 +31,8 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
     switch (cmd.device()) {
         case Device::Steppers:
             #ifdef DEBUG_MOTION_EXECUTION
-            printk("[EXEC] G1 - Begin stepper move (L:%d R:%d deg/s)\n", cmd.steppers().left_velocity, cmd.steppers().right_velocity);
+            printk("[EXEC] G1 - Begin stepper move (L:%.2f R:%.2f deg/s)\n", 
+                   (double)cmd.steppers().left_velocity, (double)cmd.steppers().right_velocity);
             #endif
             executeStepperCommand(cmd);
             break;
@@ -43,9 +57,12 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
 void MotionExecutor::executeStepperCommand(const ExecuteCommand& cmd) {
     stepper_left_.setVelocity(cmd.steppers().left_velocity);
     stepper_right_.setVelocity(cmd.steppers().right_velocity);
-    k_sleep(K_MSEC((int)(STEPPER_CTRL_PERIOD * 1000)));
-    stepper_left_.setVelocity(0);
-    stepper_right_.setVelocity(0);
+    
+    // Start timer to stop motors after control period
+    k_timer_start(&stepper_motion_timer, K_MSEC((int)(STEPPER_CTRL_PERIOD * 1000)), K_NO_WAIT);
+    
+    // Wait for timer callback to complete motion
+    k_sem_take(&stepper_motion_complete, K_FOREVER);
 }
 
 // Time for servo to reach position (ms) - typical hobby servo is ~200ms for full sweep

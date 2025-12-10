@@ -25,10 +25,16 @@
 // -------------------
 
 /*
-    - angle too wide        ->  wheelbase too narrow
-    - angle too narrow      ->  wheelbase too wide
-    - square extends beyond ->  wheelbase too wide
-    - square not completed  ->  wheelbase too narrow
+    WHEELBASE CALIBRATION:
+    1. Command a 360° turn (or multiple full rotations for better accuracy)
+    2. Measure the actual angle turned
+    3. Calculate: new_wheelbase = current_wheelbase * (actual_angle / commanded_angle)
+    
+    SYMPTOMS:
+    - Angle too wide (overturns)  ->  wheelbase value too narrow, increase it
+    - Angle too narrow (underturns) ->  wheelbase value too wide, decrease it
+    - Square extends beyond start ->  wheelbase too wide
+    - Square doesn't close        ->  wheelbase too narrow
 */
 
 #ifdef BOO
@@ -38,7 +44,7 @@
 
 #ifdef DOO
 #define WHEEL_DIAMETER          (59.4f)
-#define WHEELBASE               (176.0f) // too narrow
+#define WHEELBASE               (177.0f)  // TODO: calibrate - see instructions above
 #endif
 
 
