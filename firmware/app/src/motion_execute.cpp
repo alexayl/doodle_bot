@@ -48,6 +48,12 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
             #endif
             executeServoCommand(cmd);
             break;
+        case Device::StatusLed:
+            #ifdef DEBUG_MOTION_EXECUTION
+            printk("[EXEC] LED state=%d\n", cmd.led().state);
+            #endif
+            executeLedCommand(cmd);
+            break;
         default:
             printk("MotionExecutor: Unknown device %d\n", static_cast<int>(cmd.device()));
             break;
@@ -87,11 +93,8 @@ void MotionExecutor::executeServoCommand(const ExecuteCommand& cmd) {
 }
 
 void MotionExecutor::executeLedCommand(const ExecuteCommand& cmd) {
-    if (cmd.led().state) {
-        led_.turnOn();
-    } else {
-        led_.turnOff();
-    }
+    // Use led_.set() to match test-esp-led behavior (calls led_driver_set)
+    led_.set(cmd.led().state ? 1 : 0);
 }
 
 void MotionExecutor::reset() {

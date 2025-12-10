@@ -8,6 +8,7 @@
 #include "motion_execute.h"
 #include "state_task.h"
 #include "config.h"
+#include "pwm_buzzer.h"
 
 
 /* QUEUE MANAGEMENT */
@@ -39,7 +40,14 @@ static struct k_thread state_thread_data;
 
 static int hardware_init() {
     // Stepper motors are auto-initialized via Zephyr's device model (devicetree)
-    // Servo, LED, Buzzer initialization is handled by their respective wrappers
+    // Servo, LED initialization is handled by their respective wrappers
+    
+    // Initialize buzzer early so it's ready for BLE connect/disconnect events
+    int ret = pwm_buzzer_init();
+    if (ret < 0) {
+        printk("WARNING: Buzzer initialization failed: %d\n", ret);
+    }
+    
     printk("Hardware initialized successfully\n");
     return 0;
 }

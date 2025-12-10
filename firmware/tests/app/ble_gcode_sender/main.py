@@ -48,11 +48,11 @@ draw_a_square_commands = [
     b"G1 X-100 Y0\n",
     b"G1 X0 Y-100\n",
 
-    # draw a square
-    b"G1 X100 Y0\n",
-    b"G1 X0 Y100\n",
-    b"G1 X-100 Y0\n",
-    b"G1 X0 Y-100\n",
+    # # draw a square
+    # b"G1 X100 Y0\n",
+    # b"G1 X0 Y100\n",
+    # b"G1 X-100 Y0\n",
+    # b"G1 X0 Y-100\n",
 
 
     # lift up marker

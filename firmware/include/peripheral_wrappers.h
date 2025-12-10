@@ -5,7 +5,7 @@
 #include <math.h>
 #include "servo.h"
 #include "simple_led.h"
-#include "buzzer.h"
+#include "pwm_buzzer.h"
 
 class Peripheral {
 public:
@@ -70,9 +70,12 @@ public:
 
 class Buzzer: public Peripheral {
 public:
-    void initialize() override { buzzer_init(); }
-    void buzzOn()  { buzzer_on(); }
-    void buzzOff() { buzzer_off(); }
-    void toggle()  { buzzer_toggle(); }
-    bool isReady() { return buzzer_is_ready(); }
+    void initialize() override { pwm_buzzer_init(); }
+    void buzzOn()  { pwm_buzzer_on(); }
+    void buzzOff() { pwm_buzzer_off(); }
+    void toggle()  { pwm_buzzer_toggle(); }
+    bool isReady() { return pwm_buzzer_is_ready(); }
+    void beep(uint16_t freq_hz, uint8_t volume_pct, uint32_t duration_ms) {
+        pwm_buzzer_beep(freq_hz, volume_pct, duration_ms);
+    }
 };

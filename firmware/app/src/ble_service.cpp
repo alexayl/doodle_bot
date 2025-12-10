@@ -1,6 +1,7 @@
 #include <zephyr/kernel.h>
 #include "ble_service.h"
 #include "comms_thread.h"
+#include "pwm_buzzer.h"
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -99,10 +100,18 @@ void BleService::connected(struct bt_conn *conn, uint8_t err) {
         return;
     }
     printk("BLE_CONN::SUCCESS: Device connected\n");
+    
+    // Beep on connect: rising tone
+    pwm_buzzer_beep(800, 10, 100);
+    pwm_buzzer_beep(1200, 10, 100);
 }
 
 void BleService::disconnected(struct bt_conn *conn, uint8_t reason) {
     printk("BLE_CONN::INFO: Device disconnected (reason %u)\n", reason);
+    
+    // Beep on disconnect: falling tone
+    pwm_buzzer_beep(1200, 10, 100);
+    pwm_buzzer_beep(800, 10, 100);
     
     // Reset comms state (packet ID counter, etc.)
     comms_reset();
