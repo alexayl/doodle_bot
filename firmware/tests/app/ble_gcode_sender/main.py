@@ -11,7 +11,7 @@ import argparse
 from typing import List
 from packetlib import BLEPacketHandler
 
-DEVICE_NAME = "BOO"
+DEVICE_NAME = "DOO"
 
 # this works
 servo_alternate_commands = [
@@ -34,23 +34,19 @@ default_commands = [
 ]
 
 draw_a_square_commands = [
+
+    # start to get a clean line
+    b"M280 P0 S0\n",
+    b"G1 X50 Y0\n",
+
+    # set down marker
     b"M280 P0 S40\n",
 
+    # draw a square
     b"G1 X50 Y0\n",
     b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
 
-    b"G1 X50 Y0\n",
-    b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
-
-    b"G1 X50 Y0\n",
-    b"G1 X0 Y50\n",
-    b"G1 X-50 Y0\n",
-    b"G1 X0 Y-50\n",
-
+    # lift up marker
     b"M280 P0 S0\n",
 
 ]

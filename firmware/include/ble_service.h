@@ -79,7 +79,13 @@ private:
 	struct k_mutex send_mutex;
 
 	// Static members for BLE service
+	#if defined(BOO)
     static constexpr const char* DEVICE_NAME = "BOO";
+	#elif defined(DOO)
+    static constexpr const char* DEVICE_NAME = "DOO";
+	#else
+    #error "DEVICE_NAME not defined"
+	#endif
     static constexpr size_t DEVICE_NAME_LEN = sizeof(DEVICE_NAME) - 1;
 
     static const struct bt_data ad[];
