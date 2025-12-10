@@ -12,7 +12,7 @@
 
 /* QUEUE MANAGEMENT */
 K_MSGQ_DEFINE(gcode_cmd_msgq, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
-K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), MESSAGES_PER_QUEUE, alignof(ExecuteCommand));
+K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), MOTION_PLAN_OUTPUT_SIZE, alignof(ExecuteCommand));
 
 
 /* THREAD DEFINITION AND MANAGEMENT */

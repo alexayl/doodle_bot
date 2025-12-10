@@ -15,7 +15,8 @@ extern BleService* g_bleService;
 enum Device : uint8_t {
     Steppers,
     MarkerServo,
-    EraserServo
+    EraserServo,
+    ConfigAck  // Immediate ACK for config commands (M503, M504)
 };
 
 /**
@@ -65,6 +66,10 @@ public:
                 servo_.servo_id = 1;
                 break;
 
+            case Device::ConfigAck:
+                // No data to store - just needs packet_id for ACK
+                break;
+
             default:
                 break;
         }
@@ -80,6 +85,8 @@ public:
         if (device_ == Steppers) {
             printk("ExecuteCommand[STEPPER]: packet=%d, left=%.2f, right=%.2f\n",
                    packet_id_, (double)steppers_.left_velocity, (double)steppers_.right_velocity);
+        } else if (device_ == ConfigAck) {
+            printk("ExecuteCommand[CONFIG]: packet=%d\n", packet_id_);
         } else {
             printk("ExecuteCommand[SERVO]: packet=%d, servo_id=%d, angle=%d\n",
                    packet_id_, servo_.servo_id, servo_.angle);

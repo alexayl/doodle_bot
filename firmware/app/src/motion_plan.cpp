@@ -4,9 +4,13 @@
 
 #include "comms_thread.h"
 #include "config.h"
+#include "runtime_config.h"
 #include "instruction_parser.h"
 #include "motion_plan.h"
 #include "motion_execute.h"
+
+// Define the global RuntimeConfig instance
+RuntimeConfig RuntimeConfig::instance_;
 
 
 // -------------------
@@ -76,9 +80,10 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
 
     // See docs/firmware/differential_drive_kinematics.md for derivation
 
-    // step 2
-    float d_left = nav_command.r - (nav_command.theta * DOODLEBOT_RADIUS);
-    float d_right = nav_command.r + (nav_command.theta * DOODLEBOT_RADIUS);
+    // step 2 - use runtime config for wheelbase
+    float doodlebot_radius = RUNTIME_DOODLEBOT_RADIUS;
+    float d_left = nav_command.r - (nav_command.theta * doodlebot_radius);
+    float d_right = nav_command.r + (nav_command.theta * doodlebot_radius);
 
     #ifdef DEBUG_INTERPOLATE
     printk("Discretize: d_left=%.2f mm, d_right=%.2f mm\n", (double)d_left, (double)d_right);
@@ -142,9 +147,10 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
             float current_v_left = max_step_v_left * velocity_scale;
             float current_v_right = max_step_v_right * velocity_scale;
             
-            // step 4: convert linear velocity to angular velocity
-            float omega_left_rad = current_v_left / WHEEL_RADIUS;
-            float omega_right_rad = current_v_right / WHEEL_RADIUS;
+            // step 4: convert linear velocity to angular velocity (use runtime config)
+            float wheel_radius = RUNTIME_WHEEL_RADIUS;
+            float omega_left_rad = current_v_left / wheel_radius;
+            float omega_right_rad = current_v_right / wheel_radius;
             
             // step 5: create stepper command
             ExecuteCommand::StepperData stepper_data;
@@ -179,9 +185,10 @@ int MotionPlanner::discretize(const NavCommand& nav_command) {
             float current_v_left = max_step_v_left * velocity_scale;
             float current_v_right = max_step_v_right * velocity_scale;
             
-            // step 4: convert linear velocity to angular velocity
-            float omega_left_rad = current_v_left / WHEEL_RADIUS;
-            float omega_right_rad = current_v_right / WHEEL_RADIUS;
+            // step 4: convert linear velocity to angular velocity (use runtime config)
+            float wheel_radius = RUNTIME_WHEEL_RADIUS;
+            float omega_left_rad = current_v_left / wheel_radius;
+            float omega_right_rad = current_v_right / wheel_radius;
             
             // step 5: create stepper command
             ExecuteCommand::StepperData stepper_data;
@@ -259,6 +266,42 @@ void MotionPlanner::consumeEraser() {
 }
 
 
+void MotionPlanner::consumeConfig() {
+    // M503 - Report current configuration
+    // M504 W<wheelbase_mm> R<wheel_radius_mm> - Set configuration
+    
+    RuntimeConfig& config = RuntimeConfig::instance();
+    
+    if (current_gcode_cmd_.number == 503) {
+        // Report current config
+        config.printConfig();
+    } else if (current_gcode_cmd_.number == 504) {
+        // Set config - parse W (wheelbase) and R (radius) arguments
+        for (uint8_t i = 0; i < current_gcode_cmd_.argc; i++) {
+            char letter = current_gcode_cmd_.args[i].letter;
+            float value = current_gcode_cmd_.args[i].value;
+            
+            if (letter == 'W') {
+                config.setWheelbase(value);
+            } else if (letter == 'R') {
+                config.setWheelRadius(value);
+            } else if (letter == 'D') {
+                // Convenience: D sets wheel diameter (converts to radius)
+                config.setWheelRadius(value / 2.0f);
+            }
+        }
+        // Print updated config
+        config.printConfig();
+    }
+    
+    // Config commands complete immediately - create a no-op execute command
+    // to trigger the ACK response
+    ExecuteCommand execute_cmd;
+    execute_cmd.set(ConfigAck, nullptr, current_packet_id_);
+    addToOutput(execute_cmd);
+}
+
+
 MotionPlanner::Output MotionPlanner::consumeGcode(const InstructionParser::GCodeCmd &gcode_cmd) {
 
     // Store current command and packet ID
@@ -272,6 +315,15 @@ MotionPlanner::Output MotionPlanner::consumeGcode(const InstructionParser::GCode
     if (current_gcode_cmd_.code == 'G' && current_gcode_cmd_.number == 1) {
         consumeLocomotion();
 
+    } else if (current_gcode_cmd_.code == 'G' && 
+               (current_gcode_cmd_.number == 90 || current_gcode_cmd_.number == 91)) {
+        // G90/G91 - Positioning mode commands (absolute/relative)
+        // These are no-ops since firmware uses relative coordinates internally
+        // Just need to ACK
+        ExecuteCommand execute_cmd;
+        execute_cmd.set(ConfigAck, nullptr, current_packet_id_);
+        addToOutput(execute_cmd);
+
     } else if (current_gcode_cmd_.code == 'M' && current_gcode_cmd_.number == 280) {
         // M280 P<servo_id> S<angle>
         if (current_gcode_cmd_.args[0].letter == 'P' && (int)current_gcode_cmd_.args[0].value == 0) {
@@ -283,6 +335,11 @@ MotionPlanner::Output MotionPlanner::consumeGcode(const InstructionParser::GCode
         } else {
             printk("Unhandled servo command: P%d\n", (int)current_gcode_cmd_.args[0].value);
         }
+
+    } else if (current_gcode_cmd_.code == 'M' && 
+               (current_gcode_cmd_.number == 503 || current_gcode_cmd_.number == 504)) {
+        // M503 - Report config, M504 - Set config
+        consumeConfig();
 
     } else {
         printk("Unhandled command: %c%d\n", current_gcode_cmd_.code, current_gcode_cmd_.number);

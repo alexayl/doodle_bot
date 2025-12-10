@@ -47,6 +47,13 @@ void MotionExecutor::consumeCommands(const ExecuteCommand& cmd) {
             #endif
             executeServoCommand(cmd);
             break;
+        case Device::ConfigAck:
+            #ifdef DEBUG_MOTION_EXECUTION
+            printk("[EXEC] Config command completed\n");
+            #endif
+            // Config commands complete immediately - no hardware action needed
+            // ACK will be sent by the thread's ackTracker
+            break;
         default:
             printk("MotionExecutor: Unknown device %d\n", static_cast<int>(cmd.device()));
             break;

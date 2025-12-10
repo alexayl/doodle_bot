@@ -62,6 +62,7 @@ private:
     void consumeLocomotion();
     void consumeMarker();
     void consumeEraser();
+    void consumeConfig();
 
     // interpolation
     float theta_current_;
