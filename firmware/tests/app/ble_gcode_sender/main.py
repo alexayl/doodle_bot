@@ -43,10 +43,10 @@ draw_a_square_commands = [
     b"M280 P0 S50\n",
 
     # draw a square
-    b"G1 X100 Y0\n",
-    b"G1 X0 Y100\n",
-    b"G1 X-100 Y0\n",
-    b"G1 X0 Y-100\n",
+    # b"G1 X100 Y0\n",
+    # b"G1 X0 Y100\n",
+    # b"G1 X-100 Y0\n",
+    # b"G1 X0 Y-100\n",
 
     # # draw a square
     # b"G1 X100 Y0\n",
