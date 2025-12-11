@@ -7,6 +7,7 @@ import sys
 import time
 from bleak import BleakClient, BleakScanner
 from typing import Optional
+from collections import deque
 
 RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 TX_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
@@ -26,6 +27,9 @@ class BLEPacketHandler:
         self.last_received_message: Optional[str] = None
         self.client: Optional[BleakClient] = None
         self.timeout: float = 60.0  # Increased to 60 seconds for large movements
+        self.ack_event: Optional[asyncio.Event] = None
+        self.pending_acks: dict = {}  # packet_id -> (command_index, command_bytes, send_time)
+        self.ack_queue: deque = deque()  # Queue of received (packet_id, message) tuples
         
     def get_next_packet_id(self) -> int:
         """Generate sequential packet ID with automatic wraparound at 255."""
@@ -78,16 +82,31 @@ class BLEPacketHandler:
     def _handle_rx_with_timing(self, _, data: bytearray):
         """
         Process incoming acknowledgment packets from the device.
+        Queues ACKs so none are lost even if they arrive rapidly.
         """
         if len(data) > 0:
-            self.last_received_packet_id = int(data[0])
+            packet_id = int(data[0])
             raw_message = data[1:].decode(errors='ignore')
-            self.last_received_message = ''.join(c for c in raw_message if c.isprintable()).strip()
+            message = ''.join(c for c in raw_message if c.isprintable()).strip()
+            
+            # Queue the ACK (so we don't lose any)
+            self.ack_queue.append((packet_id, message))
+            
+            # Also store as last received (for backwards compatibility)
+            self.last_received_packet_id = packet_id
+            self.last_received_message = message
+            
+            # Debug: print ALL received ACKs
+            print(f"  [RX] pid:{packet_id} msg:'{message}'")
         else:
             self.last_received_packet_id = None
             self.last_received_message = None
         
         self.response_received = True
+        
+        # Signal windowed sender if active
+        if self.ack_event:
+            self.ack_event.set()
 
     async def send_packet(self, command_bytes: bytes, max_retries: int = 3):
         """
@@ -133,9 +152,64 @@ class BLEPacketHandler:
         
         
 
-    async def send_packets(self, all_commands):
+    async def send_packets(self, all_commands, window_size: int = 5):
         """
-        Send multiple packets in sequence.
+        Send multiple packets with a sliding window approach.
+        Keeps up to window_size commands in flight at a time.
         """
-        for command in all_commands:
-            await self.send_packet(command)
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("Not connected to BLE device")
+        
+        total_commands = len(all_commands)
+        next_to_send = 0  # Index of next command to send
+        self.pending_acks = {}  # packet_id -> (command_index, command_bytes)
+        self.ack_queue.clear()  # Clear any stale ACKs
+        completed = 0
+        
+        # Create event for ACK signaling
+        self.ack_event = asyncio.Event()
+        
+        try:
+            while completed < total_commands:
+                # First, process any queued ACKs
+                while self.ack_queue:
+                    packet_id, message = self.ack_queue.popleft()
+                    if packet_id in self.pending_acks:
+                        if message == "ok":
+                            idx, cmd = self.pending_acks.pop(packet_id)
+                            completed += 1
+                            print(f"ACK pid:{packet_id} [{completed}/{total_commands}] (in-flight: {len(self.pending_acks)})")
+                        else:
+                            print(f"NACK pid:{packet_id} msg:'{message}'")
+                            self.pending_acks.pop(packet_id, None)
+                            completed += 1
+                    else:
+                        print(f"ACK for unknown pid:{packet_id}")
+                
+                # Check if we're done
+                if completed >= total_commands:
+                    break
+                
+                # Send commands up to window size
+                while len(self.pending_acks) < window_size and next_to_send < total_commands:
+                    command = all_commands[next_to_send]
+                    packet_with_id = self.create_packet_with_id(command)
+                    packet_id = packet_with_id[0]
+                    
+                    await self.client.write_gatt_char(RX_CHAR_UUID, packet_with_id)
+                    print(f"SEND pid:{packet_id} cmd:{command.decode().strip()} [{next_to_send+1}/{total_commands}] (in-flight: {len(self.pending_acks)+1})")
+                    
+                    self.pending_acks[packet_id] = (next_to_send, command)
+                    next_to_send += 1
+                
+                # Wait for an ACK (with short timeout to check queue frequently)
+                self.ack_event.clear()
+                try:
+                    await asyncio.wait_for(self.ack_event.wait(), timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    print(f"Timeout waiting for ACK, {len(self.pending_acks)} commands pending")
+                    break
+                    
+        finally:
+            self.ack_event = None
+            self.pending_acks = {}

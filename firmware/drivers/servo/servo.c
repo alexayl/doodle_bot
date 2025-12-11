@@ -11,6 +11,9 @@
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
+
+#include "config.h"
 
 LOG_MODULE_REGISTER(servo, CONFIG_SERVO_LOG_LEVEL);
 
@@ -41,8 +44,12 @@ int servo_set_angle(const struct device *dev, uint8_t angle)
 
     uint32_t pulse = SERVO_MIN_PULSE + ((SERVO_MAX_PULSE - SERVO_MIN_PULSE) * angle) / 180U;
     uint32_t period = 20000U; /* 20ms period for servo */
-
-    return pwm_set_dt(&config->pwm, PWM_USEC(period), PWM_USEC(pulse));
+        
+    int ret = pwm_set_dt(&config->pwm, PWM_USEC(period), PWM_USEC(pulse));
+#ifdef DEBUG_SERVO
+    printk("SERVO[%s]: angle=%d, pulse=%u us, ret=%d\n", config->pwm.dev->name, angle, pulse, ret);
+#endif
+    return ret;
 }
 
 int servo_set_angle_by_alias(const char *alias, uint8_t angle)

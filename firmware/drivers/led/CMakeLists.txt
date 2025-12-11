@@ -1,4 +1,4 @@
 # Copyright (c) 2025 Doodle Bot Project
 # SPDX-License-Identifier: Apache-2.0
 
-zephyr_sources_ifdef(CONFIG_LOCAL_LED_GPIO led_gpio.c)
+zephyr_sources_ifdef(CONFIG_LOCAL_LED_GPIO simple_led.c)

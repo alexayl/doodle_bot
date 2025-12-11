@@ -66,6 +66,8 @@ flash-esp32:
 monitor-esp32:
   python -m serial.tools.miniterm "{{ESP_PORT}}" 115200
 
+go-esp32: flash-esp32 monitor-esp32
+
 run-esp32: build-esp32 flash-esp32 monitor-esp32
 
 

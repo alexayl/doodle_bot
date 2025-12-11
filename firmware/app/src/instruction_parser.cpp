@@ -62,7 +62,7 @@ int InstructionParser::parseLine(const char* line, GCodeCmd& outCmd) {
 int InstructionParser::isSupported(const GCodeCmd& cmd) {
     if (cmd.code == 'G' && (cmd.number == 91 || cmd.number == 1 || cmd.number == 90))
         return 0;
-    if (cmd.code == 'M' && cmd.number == 280)
+    if (cmd.code == 'M' && (cmd.number == 280 || cmd.number == 503 || cmd.number == 504))
         return 0;
     return -EINVAL;
 }

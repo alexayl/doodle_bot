@@ -84,7 +84,6 @@ static uint32_t gpio_pulse_count = 0;
 /* PWM cycle tracking for precise debugging */
 static uint32_t expected_pwm_cycles = 0;
 static uint32_t movement_start_time = 0;
-static uint32_t current_step_freq_hz = 0;
 static uint32_t movement_step_freq_hz = 0;  /* Frequency during movement for calculations */
 static bool step_counting_enabled = false;
 static uint32_t current_movement_steps = 0;
@@ -189,9 +188,10 @@ int stepper_disable(enum stepper_motor motor)
         return ret;
     }
     
-    /* Stop PWM */
-    pwm_set_dt(pwm, 0, 0);
-    
+    /* 
+     * Don't call pwm_set_dt(pwm, 0, 0) - triggers ESP32 LEDC bug that corrupts other channels.
+     * Just disable via enable pin - PWM can keep running harmlessly.
+     */
     gpio_pin_set_dt(en, 0);  // LOW = disabled
     
     if (motor == STEPPER_LEFT) {
@@ -286,8 +286,12 @@ int stepper_set_velocity(enum stepper_motor motor, float velocity_deg_s)
             movement_step_freq_hz = step_freq_hz;  /* Save frequency for calculations */
         }
     } else {
-        /* Stop PWM and disable motor to prevent heating */
-        pwm_set_dt(pwm, 0, 0);
+        /* 
+         * Don't call pwm_set_dt(pwm, 0, 0) - this triggers a bug in the ESP32 LEDC driver
+         * that reinitializes the HAL and corrupts other PWM channels (like servos).
+         * Instead, just disable the motor via enable pin - the PWM can keep running
+         * but no steps will occur since the driver is disabled.
+         */
         
         /* Disable motor when stopped to prevent overheating */
         if (motor_enabled) {

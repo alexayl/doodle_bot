@@ -15,26 +15,27 @@
         label = "SERVO_MARKER";
     };
 
-    /* Left stepper motor via A4988 driver */
+    /* Left stepper motor via A4988 driver - GPIO-based (no PWM interference) */
     stepper_left: stepper_left {
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        pwms = <&ledc0 3 20000 0>;                     /* 20ms period, channel 3, GPIO5 - Step pulses via PWM */
+        step-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;      /* GPIO5 - Step pulses via GPIO toggle */
         dir-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;       /* GPIO6 - Direction control */
         en-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;         /* GPIO7 - Enable/disable */
-        label = "LEFT_STEPPER";
+        counter = <&counter0>;                          /* Use timer0's counter for step timing */
     };
 
-    /* Right stepper motor via A4988 driver */
+    /* Right stepper motor via A4988 driver - GPIO-based (no PWM interference) */
     stepper_right: stepper_right {
         status = "okay";
         compatible = "doodle,a4988-stepper";
         micro-step-res = <16>;
-        pwms = <&ledc0 4 20000 0>;                     /* 20µs period, channel 4, GPIO8 - Step pulses via PWM */
+        invert-direction;                               /* Invert for differential drive (motors mirrored) */
+        step-gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;      /* GPIO8 - Step pulses via GPIO toggle */
         dir-gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;       /* GPIO9 - Direction control */
         en-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;        /* GPIO10 - Enable/disable */
-        label = "RIGHT_STEPPER";
+        counter = <&counter1>;                          /* Use timer1's counter for step timing */
     };
 
     /* DFPlayer Mini audio module */
@@ -111,6 +112,25 @@
     };
 };
 
+/* Enable timers and their counter sub-nodes for stepper step timing */
+&timer0 {
+    status = "okay";
+    
+    /* Enable the counter child node */
+    counter0: counter {
+        status = "okay";
+    };
+};
+
+&timer1 {
+    status = "okay";
+    
+    /* Enable the counter child node */
+    counter1: counter {
+        status = "okay";
+    };
+};
+
 &ledc0 {
     status = "okay";
     pinctrl-0 = <&ledc0_default>;
@@ -119,6 +139,7 @@
     #address-cells = <1>;
     #size-cells = <0>;
 
+    /* Servo channels only - steppers now use GPIO + counter */
     channel0@0 {
         reg = <0x0>;
         timer = <0>;
@@ -133,16 +154,6 @@
         reg = <0x2>;
         timer = <1>;
     };
-
-    channel3@3 {
-        reg = <0x3>;
-        timer = <2>;    /* Give left stepper its own timer for high frequency PWM */
-    };
-
-    channel4@4 {
-        reg = <0x4>;
-        timer = <3>;    /* Give right stepper its own timer for high frequency PWM */
-    };
 };
 
 &pinctrl {
@@ -150,9 +161,8 @@
         group1 {
             pinmux = <LEDC_CH0_GPIO2>,   /* GPIO2 - Servo PWM on Channel 0 */
                      <LEDC_CH1_GPIO3>,   /* GPIO3 - Servo PWM on Channel 1 */
-                     <LEDC_CH2_GPIO12>,  /* GPIO12 - Buzzer PWM on Channel 2 */
-                     <LEDC_CH3_GPIO5>,   /* GPIO5 - Left Stepper PWM on Channel 3 */
-                     <LEDC_CH4_GPIO8>;   /* GPIO8 - Right Stepper PWM on Channel 4 */
+                     <LEDC_CH2_GPIO12>;  /* GPIO12 - Buzzer PWM on Channel 2 */
+            /* GPIO5, GPIO8 now used as regular GPIO for stepper steps */
             output-enable;
         };
     };

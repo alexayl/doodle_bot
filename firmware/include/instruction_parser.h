@@ -1,5 +1,6 @@
 #pragma once
 
+#include <zephyr/sys/printk.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -28,6 +29,13 @@ public:
         int number;     // e.g. 91, 0, 280
         Arg args[MAX_ARGS];
         uint8_t argc;
+
+        void print() const {
+            printk("GCodeCmd: code=%c, number=%d, argc=%d\n", code, number, argc);
+            for (uint8_t i = 0; i < argc; i++) {
+                printk("  Arg %d: %c = %f\n", i, args[i].letter, (double)args[i].value);
+            }
+        }
     };
 
     enum Instruction : uint8_t {

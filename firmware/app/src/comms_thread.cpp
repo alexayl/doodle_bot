@@ -3,7 +3,7 @@
 #include "comms_thread.h"
 #include "instruction_parser.h"
 #include "ble_service.h"
-#include "navigation.h"
+#include "motion_plan.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -66,10 +66,8 @@ void gcode_to_nav_handler(const void* data, uint16_t len, k_msgq *q) {
         return;
     }
 
-    // Send ACK on success
-    char ack[sizeof("aok\n")] = "aok\n";
-    ack[0] = cmd.packet_id;
-    g_bleService->send(ack, sizeof(ack));
+    // NOTE: ACK is sent by motion_executor when command execution completes,
+    // not here. This prevents duplicate ACKs that can overwhelm the Python client.
 }
 
 void comms_thread(void *gcode_cmd_msgq_void, void *arg2, void *arg3) {

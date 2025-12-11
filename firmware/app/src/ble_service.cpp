@@ -1,8 +1,45 @@
 #include <zephyr/kernel.h>
 #include "ble_service.h"
 #include "comms_thread.h"
+#include "pwm_buzzer.h"
 #include <stdbool.h>
 #include <stdio.h>
+
+
+/* ACK QUEUE CONFIGURATION */
+
+#define ACK_QUEUE_SIZE 16
+#define ACK_DELAY_MS 100  // Minimum delay between ACKs (100ms for reliable BLE)
+
+// Queue to hold pending ACK packet IDs
+K_MSGQ_DEFINE(ack_queue, sizeof(uint8_t), ACK_QUEUE_SIZE, 1);
+
+// Delayed work for sending ACKs
+static struct k_work_delayable ack_work;
+
+static void ack_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+    uint8_t pid;
+    
+    // Get next ACK from queue
+    if (k_msgq_get(&ack_queue, &pid, K_NO_WAIT) == 0) {
+        if (BleService::instance != nullptr) {
+            char ack[sizeof("aok\n")] = "aok\n";
+            ack[0] = pid;
+            
+            #ifdef DEBUG_BLE
+            printk("BLE_ACK: Sending ACK for pid=%d\n", pid);
+            #endif
+            
+            BleService::instance->send(ack, sizeof(ack));
+        }
+        
+        // If more ACKs pending, schedule next one with delay
+        if (k_msgq_num_used_get(&ack_queue) > 0) {
+            k_work_schedule(&ack_work, K_MSEC(ACK_DELAY_MS));
+        }
+    }
+}
 
 
 /* STATIC MEMBER DEFINITIONS */
@@ -63,10 +100,18 @@ void BleService::connected(struct bt_conn *conn, uint8_t err) {
         return;
     }
     printk("BLE_CONN::SUCCESS: Device connected\n");
+    
+    // Beep on connect: rising tone
+    pwm_buzzer_beep(800, 10, 100);
+    pwm_buzzer_beep(1200, 10, 100);
 }
 
 void BleService::disconnected(struct bt_conn *conn, uint8_t reason) {
     printk("BLE_CONN::INFO: Device disconnected (reason %u)\n", reason);
+    
+    // Beep on disconnect: falling tone
+    pwm_buzzer_beep(1200, 10, 100);
+    pwm_buzzer_beep(800, 10, 100);
     
     // Reset comms state (packet ID counter, etc.)
     comms_reset();
@@ -147,5 +192,40 @@ void BleService::receive(const void *data, uint16_t len) {
         #ifdef DEBUG_BLE
         printk("BLE_RECEIVE::ERROR: No receive handler specified\n");
         #endif
+    }
+}
+
+void BleService::initAckQueue() {
+    k_work_init_delayable(&ack_work, ack_work_handler);
+}
+
+void BleService::queueAck(uint8_t packet_id) {
+    #ifdef DEBUG_BLE
+    printk("BLE_ACK: Queuing ACK for pid=%d\n", packet_id);
+    #endif
+    
+    if (k_msgq_put(&ack_queue, &packet_id, K_NO_WAIT) != 0) {
+        printk("BLE_ACK: Queue full, dropping ACK for pid=%d\n", packet_id);
+        return;
+    }
+    k_work_schedule(&ack_work, K_MSEC(ACK_DELAY_MS));
+}
+
+
+/* PACKET ACK TRACKER */
+
+void PacketAckTracker::onCommand(uint8_t packet_id) {
+    if (has_prev_ && packet_id != last_id_ && g_bleService != nullptr) {
+        g_bleService->queueAck(last_id_);
+    }
+    last_id_ = packet_id;
+    has_prev_ = true;
+    acked_ = false;
+}
+
+void PacketAckTracker::onTimeout() {
+    if (!acked_ && has_prev_ && g_bleService != nullptr) {
+        g_bleService->queueAck(last_id_);
+        acked_ = true;
     }
 }
