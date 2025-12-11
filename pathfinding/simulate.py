@@ -77,9 +77,9 @@ def simulate(filename, canvas_size=(575, 730)):
                     try:
                         dz = int(parts[2][1:])
                         if dz == 40:
-                            pen_down = False
-                        elif dz == 0:
                             pen_down = True
+                        elif dz == 0:
+                            pen_down = False
                     except (ValueError, IndexError):
                         continue
     
