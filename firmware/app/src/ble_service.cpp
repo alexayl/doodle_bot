@@ -1,9 +1,11 @@
 #include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
 #include "ble_service.h"
 #include "comms_thread.h"
 #include "melody.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <zephyr/toolchain.h>
 
 
 /* ACK QUEUE CONFIGURATION */
@@ -109,11 +111,12 @@ void BleService::disconnected(struct bt_conn *conn, uint8_t reason) {
     
     melody_play(MELODY_DISCONNECT, 10);
     
+    sys_reboot(SYS_REBOOT_WARM);
     // Reset comms state (packet ID counter, etc.)
-    comms_reset();
+    // comms_reset();
     
     // Schedule advertising restart via work queue (deferred to system workqueue context)
-    k_work_schedule(&adv_restart_work, K_MSEC(100));
+    // k_work_schedule(&adv_restart_work, K_MSEC(100));
 }
 
 
