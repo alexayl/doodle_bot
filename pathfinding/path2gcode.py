@@ -19,14 +19,14 @@ def path2gcode(path, filename="output.gcode"):
     def write_servo(pen_eraser, up_down):
         if pen_eraser == "pen":
             if up_down == "up":
-                gcode.append("M280 P0 S40")
-            elif up_down == "down":
                 gcode.append("M280 P0 S0")
+            elif up_down == "down":
+                gcode.append("M280 P0 S40")
         elif pen_eraser == "eraser":
             if up_down == "up":
-                gcode.append("M280 P1 S40")
-            elif up_down == "down":
                 gcode.append("M280 P1 S0")
+            elif up_down == "down":
+                gcode.append("M280 P1 S40")
 
     for s, segment in enumerate(path):
         if s == 0:
