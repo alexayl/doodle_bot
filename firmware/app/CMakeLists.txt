@@ -15,6 +15,7 @@ target_sources(app PRIVATE ${DOODLE_BOT_SOURCES})
 target_sources(app PRIVATE 
     ${CMAKE_SOURCE_DIR}/../drivers/stepper/a4988.c
     ${CMAKE_SOURCE_DIR}/../drivers/buzzer/pwm_buzzer.c
+    ${CMAKE_SOURCE_DIR}/../drivers/buzzer/melody.c
     ${CMAKE_SOURCE_DIR}/../drivers/led/simple_led.c
     ${CMAKE_SOURCE_DIR}/../drivers/servo/servo.c
 )
