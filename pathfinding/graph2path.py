@@ -21,7 +21,7 @@ def get_distance(node1, node2, graph):
         return 0
     return np.linalg.norm(np.array(node1) - np.array(node2))
 
-def graph2path(graph, endpoints, starting_node_inset_p=0.05, canvas_size=(1150, 1460), debug=False, save=False):
+def graph2path(graph, endpoints, starting_node_inset_p=0.20, canvas_size=(1150, 1460), debug=False, save=False):
     """
     Convert a graph to an optimized path visiting all endpoints.
     
