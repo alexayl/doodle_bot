@@ -79,7 +79,7 @@ def load_image(img_name, img_name_ext, directory="png/", extension=".png", debug
 
     return img
 
-def scale_to_canvas(img, img_name_ext, granularity, canvas_size=(1150, 1460), padding_percentage=0.20, debug=False, save=False):
+def scale_to_canvas(img, img_name_ext, granularity, canvas_size=(1150, 1460), padding_percentage=0.10, debug=False, save=False):
     """
     Scale an image to fit within a specified canvas size while maintaining 
     aspect ratio.
