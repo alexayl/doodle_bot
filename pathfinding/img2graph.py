@@ -554,7 +554,7 @@ if __name__ == "__main__":
     img_name = args.img_name
     granularity = args.g
 
-    canvas_size = (900, 530)
+    canvas_size = (1390, 940)
 
     debug_all = args.debug
     display_array = [False,   # load_image

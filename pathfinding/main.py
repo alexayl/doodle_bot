@@ -68,6 +68,6 @@ if __name__ == "__main__":
     time_execution = args.time
     simumlate = args.sim
     granularity = args.g
-    canvas_size = (900, 530)
+    canvas_size = (1390, 940)
 
     main(img_name, canvas_size=canvas_size, time_execution=time_execution, simumlate=simumlate, granularity=granularity)

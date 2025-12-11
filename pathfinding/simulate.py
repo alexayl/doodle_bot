@@ -76,7 +76,7 @@ def simulate(filename, canvas_size=(575, 730)):
                 if len(parts) >= 3:
                     try:
                         dz = int(parts[2][1:])
-                        if dz == 90:
+                        if dz == 40:
                             pen_down = False
                         elif dz == 0:
                             pen_down = True
@@ -123,6 +123,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     img_name = args.img_name
-    canvas_size = (575, 730)
+    canvas_size = (900, 530)
     filepath = "gcode/" + img_name + ".gcode"
     anim = simulate(filepath, canvas_size=canvas_size)
