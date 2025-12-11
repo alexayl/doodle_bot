@@ -13,7 +13,9 @@
 
 /* QUEUE MANAGEMENT */
 K_MSGQ_DEFINE(gcode_cmd_msgq, sizeof(InstructionParser::GCodeCmd), MESSAGES_PER_QUEUE, alignof(InstructionParser::GCodeCmd));
-K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), MOTION_PLAN_OUTPUT_SIZE, alignof(ExecuteCommand));
+// Execute queue only needs to buffer between threads, not hold entire motion plan output
+#define EXECUTE_QUEUE_SIZE 128
+K_MSGQ_DEFINE(execute_cmd_msgq, sizeof(ExecuteCommand), EXECUTE_QUEUE_SIZE, alignof(ExecuteCommand));
 
 
 /* THREAD DEFINITION AND MANAGEMENT */

@@ -22,13 +22,26 @@ servo_alternate_commands = [
 ]
 
 default_commands = [
+    # set eraser up and marker down
+    b"M280 P1 S0\n",
     b"M280 P0 S40\n",
-    b"G1 X100 Y0\n",
-    b"M280 P0 S0\n",
-    b"G1 X0 Y100\n",
-    b"M280 P0 S40\n",
-    b"G1 X-100 Y0\n",
-    b"M280 P0 S0\n",
+
+    # draw a line
+    b"G1 X200 Y0\n",
+
+    # set eraser down and trace over the line again
+    b"M280 P1 S45\n",
+    b"G1 X-200 Y0\n",
+    b"M280 P1 S0\n",
+
+    # b"G1 X100 Y0\n",
+    # b"M280 P1 S25\n",
+    # b"G1 X1000 Y0\n",
+    # b"M280 P0 S0\n",
+    # b"G1 X0 Y100\n",
+    # b"M280 P0 S40\n",
+    # b"G1 X-100 Y0\n",
+    # b"M280 P0 S0\n",
     # b"G1 X0 Y-100\n",
     # b"M280 P0 S40\n",
 ]
@@ -37,7 +50,7 @@ draw_a_square_commands = [
 
     # start to get a clean line
     b"M280 P0 S0\n",
-    b"G1 X50 Y0\n",
+    # b"G1 X50 Y0\n",
 
     # set down marker
     b"M280 P0 S50\n",
@@ -59,7 +72,7 @@ draw_a_square_commands = [
     b"M280 P0 S0\n",
 
 ]
-commands_to_send = draw_a_square_commands
+commands_to_send = default_commands
 
 def load_gcode_file(filename: str) -> List[bytes]:
     """

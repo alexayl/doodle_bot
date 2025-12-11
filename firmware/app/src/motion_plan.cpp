@@ -372,6 +372,10 @@ void MotionPlanner::reset() {
 // Motion Planner Thread
 // ---------------------
 
+// File-scope static to avoid stack overflow with large MOTION_PLAN_OUTPUT_SIZE
+// (and avoids C++ guard functions not available in minimal Zephyr runtime)
+static MotionPlanner motionPlanner;
+
 void motion_plan_thread(void *gcode_cmd_msgq_void, void *execute_cmd_msgq_void, void *arg3) {
 
     auto *gcode_cmd_msgq = static_cast<struct k_msgq *>(gcode_cmd_msgq_void);
@@ -379,7 +383,6 @@ void motion_plan_thread(void *gcode_cmd_msgq_void, void *execute_cmd_msgq_void, 
     ARG_UNUSED(arg3);
 
     InstructionParser::GCodeCmd current_instruction;
-    MotionPlanner motionPlanner;
 
     while (1) {
         // block until message arrives
