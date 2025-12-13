@@ -46,6 +46,7 @@
       <nav class="nav" aria-label="Main">
         <a class="tab {{ 'active' if page=='home' else '' }}" href="{{ url_for('home') }}">Home</a>
         <a class="tab {{ 'active' if page=='erase' else '' }}" href="{{ url_for('erase') }}">Erase</a>
+        <a class="tab {{ 'active' if page=='erase_smudges' else '' }}" href="{{ url_for('erase_smudges') }}">Smudge Erase</a>
         <a class="tab {{ 'active' if page=='draw' else '' }}" href="{{ url_for('draw') }}">Draw</a>
       </nav>
     </div>
@@ -98,6 +99,70 @@
           </aside>
         </div>
       </section>
+      
+    {% elif page == 'erase_smudges' %}
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="title">Smart Smudge Erase</div>
+          <div class="sub">CV detects smudges and erases only dirty areas</div>
+        </div>
+        <div class="panel-bd grid grid-2">
+          <div>
+            {% if msg %}<div class="alert" role="status">{{ msg }}</div>{% endif %}
+            {% if error %}<div class="alert" role="alert">⚠ {{ error }}</div>{% endif %}
+            <div class="stream-wrap">
+              <img id="stream" class="stream-aspect" src="{{ url_for('stream') }}?mode=erase_smudges" alt="Live stream" fetchpriority="high" decoding="sync" loading="eager" referrerpolicy="no-referrer"/>
+            </div>
+            <form action="{{ url_for('erase_smudges') }}" method="post">
+              <div style="margin: 12px 0;">
+                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Detection Settings:</label>
+                <div style="margin: 8px 0;">
+                  <label for="darkness_threshold">Darkness Threshold (0-255):</label>
+                  <input type="number" id="darkness_threshold" name="darkness_threshold" value="200" min="0" max="255" step="10" style="width: 80px; margin-left: 8px;"/>
+                  <span class="help" style="margin-left: 8px;">Lower = more sensitive</span>
+                </div>
+                <div style="margin: 8px 0;">
+                  <label for="min_smudge_area">Min Smudge Area (mm²):</label>
+                  <input type="number" id="min_smudge_area" name="min_smudge_area" value="25.0" min="1" max="500" step="5" style="width: 80px; margin-left: 8px;"/>
+                  <span class="help" style="margin-left: 8px;">Filter out small specs</span>
+                </div>
+                <div style="margin: 8px 0;">
+                  <label for="line_spacing">Line Spacing (mm):</label>
+                  <input type="number" id="line_spacing" name="line_spacing" value="5.0" min="2" max="20" step="1" style="width: 80px; margin-left: 8px;"/>
+                  <span class="help" style="margin-left: 8px;">Eraser path density</span>
+                </div>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button type="submit" class="btn">Detect & Erase Smudges</button>
+              </div>
+            </form>
+            <form action="{{ url_for('erase_smudges') }}" method="post" onsubmit="return sendStop(event)">
+              <input type="hidden" name="action" value="stop"/>
+              <button type="submit" class="btn secondary" style="margin-top: 8px;">Stop</button>
+            </form>
+            <p class="note" style="margin-top:12px">CV detects dark regions (smudges) on the board and generates targeted erase paths. More efficient than full board erase.</p>
+          </div>
+          <aside>
+            <div class="kicker">How It Works</div>
+            <ul class="help" style="margin:6px 0 0; padding-left:18px; line-height:1.5">
+              <li><strong>Captures</strong> calibrated board image</li>
+              <li><strong>Detects</strong> dark regions using threshold</li>
+              <li><strong>Filters</strong> by minimum area to ignore specs</li>
+              <li><strong>Generates</strong> horizontal raster paths for each smudge</li>
+              <li><strong>Optimizes</strong> order by distance (nearest first)</li>
+              <li><strong>Executes</strong> with CV-based path correction</li>
+            </ul>
+            <div class="kicker" style="margin-top: 16px;">Tips</div>
+            <ul class="help" style="margin:6px 0 0; padding-left:18px; line-height:1.5">
+              <li>Lower darkness threshold for light smudges</li>
+              <li>Increase min area to ignore dust specs</li>
+              <li>Decrease line spacing for thorough erasing</li>
+              <li>Ensure board calibration is locked first</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+      
       {% elif page == 'spec2' %}
   <section class="panel">
     <div class="panel-hd">
